@@ -1,0 +1,20 @@
+[
+  {
+    "rol": "user",
+    "contenido": "Crea un gráfico de la tasa de churn por tipo de contrato"
+  },
+  {
+    "rol": "assistant",
+    "contenido": "Error ejecutando código del gráfico: invalid syntax (<string>, line 26)",
+    "categoria": "FINANZAS"
+  },
+  {
+    "rol": "user",
+    "contenido": "Crea un gráfico de la tasa de churn por tipo de contrato"
+  },
+  {
+    "rol": "assistant",
+    "contenido": "Error ejecutando código del gráfico: invalid syntax (<string>, line 26)",
+    "categoria": "CHURN"
+  }
+]
