@@ -32,6 +32,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import requests
 import smtplib
+import pickle
 from email.message import EmailMessage
 import seaborn as sns
 import streamlit as st
@@ -43,6 +44,8 @@ from langchain_core.embeddings import Embeddings
 import cohere as cohere_sdk
 from langchain_community.document_loaders import DirectoryLoader, PyMuPDFLoader
 from langchain_community.vectorstores import FAISS
+from langchain_community.retrievers import BM25Retriever
+from langchain_classic.retrievers.ensemble import EnsembleRetriever
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -139,31 +142,58 @@ SALUDO_VIOLET = (
 
 @st.cache_resource(show_spinner="Violet está leyendo los documentos de política...")
 def cargar_vector_store():
-    if Path(RUTA_FAISS).exists():
-        return FAISS.load_local(
+    ruta_fragmentos = Path(str(RUTA_FAISS)) / "fragmentos.pkl"
+
+    if Path(RUTA_FAISS).exists() and ruta_fragmentos.exists():
+        # Carga del indice semántico de FAISS
+        vs = FAISS.load_local(
             str(RUTA_FAISS),
             embeddings,
             allow_dangerous_deserialization=True,
         )
-    if not RUTA_DOCS.exists():
-        raise FileNotFoundError(f"Carpeta no encontrada: {RUTA_DOCS}")
+        # Carga de fragmentos de texto guardados para recuperación
+        with open(ruta_fragmentos, "rb") as f:
+            fragmentos = pickle.load(f)
+    else:
+        if not RUTA_DOCS.exists():
+            raise FileNotFoundError(f"Carpeta no encontrada: {RUTA_DOCS}")
 
-    loader = DirectoryLoader(
-        str(RUTA_DOCS),
-        glob="**/*.pdf",  # Busca todos los PDFs en la carpeta (y subcarpetas)
-        loader_cls=PyMuPDFLoader,
+        loader = DirectoryLoader(
+            str(RUTA_DOCS),
+            glob="**/*.pdf",
+            loader_cls=PyMuPDFLoader,
+        )
+        docs = loader.load()
+
+        splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=80)
+        fragmentos = splitter.split_documents(docs)
+        fragmentos = [f for f in fragmentos if f.page_content.strip()]
+
+        if not fragmentos:
+            raise ValueError("Los PDFs no contienen texto extraíble.")
+
+        # Guardar FAISS de forma local
+        vs = FAISS.from_documents(fragmentos, embeddings)
+        vs.save_local(str(RUTA_FAISS))
+
+        # Guardar los fragmentos en un archivo pickle para BM25
+        Path(RUTA_FAISS).mkdir(parents=True, exist_ok=True)
+        with open(ruta_fragmentos, "wb") as f:
+            pickle.dump(fragmentos, f)
+
+    # Construcción de los recuperadores individuales
+    faiss_retriever = vs.as_retriever(search_kwargs={"k": 3})
+
+    # Recuperador de palabras clave con BM25
+    bm25_retriever = BM25Retriever.from_documents(fragmentos)
+    bm25_retriever.k = 3  # Recupera 3 fragmentos por coincidencia
+
+    # Emsanblado híbrido
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[faiss_retriever, bm25_retriever], weights=[0.5, 0.5]
     )
-    docs = loader.load()
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=80)
-    fragmentos = splitter.split_documents(docs)
-    # Filtrar fragmentos vacíos
-    fragmentos = [f for f in fragmentos if f.page_content.strip()]
-    if not fragmentos:
-        raise ValueError("Los PDFs no contienen texto extraíble.")
-    vs = FAISS.from_documents(fragmentos, embeddings)
-    vs.save_local(str(RUTA_FAISS))
-    return vs
+    return ensemble_retriever
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -251,7 +281,12 @@ def clasificar(pregunta: str) -> str:
         if frase in p:
             return "FINANZAS"
 
-    # ── Palabras clave POLITICAS ──────────────────────────────────────────
+    # ── Palabras clave ──────────────────────────────────────────
+    if any(
+        accion in p for accion in ["gmail", "telegram", "correo", "email", "enviar"]
+    ):
+        return "ACCION_ENVIO"
+
     frases_exactas = [
         "cómo funciona violet",
         "como funciona violet",
@@ -355,6 +390,7 @@ def clasificar(pregunta: str) -> str:
         print(
             f"[ROUTER] VISUALIZACIÓN detectada. Heredando contexto: {categoria_destino}"
         )
+
         return categoria_destino
 
     # ── LLM router — solo para preguntas ambiguas ─────────────────────────
@@ -563,77 +599,47 @@ def _parece_pregunta_nueva(texto: str) -> bool:
     return tiene_palabra_clave or es_largo
 
 
-def _manejar_confirmacion_envio(pregunta: str, tipo_reporte: str):
+def manejar_datos_contacto(pregunta_usuario: str):
     """
-    Máquina de estados que mantiene viva la conversación hasta que el
-    reporte se envía o el usuario declina explícitamente. No usa el LLM
-    principal — solo detección de palabras clave, así que no consume
-    tokens de Cohere en este intercambio.
+    Gestiona el envío del reporte, aplica los guardrails
+    y limpia el estado para finalizar la sesión.
     """
-    categoria_badge = "CHURN" if tipo_reporte == "churn" else "FINANZAS"
-    intencion = _detectar_intencion_envio(pregunta)
+    canal = st.session_state.proceso_envio["canal"]
+    reporte = st.session_state.proceso_envio["reporte"]
 
-    if intencion in ("telegram", "gmail"):
-        st.session_state["reporte_pendiente_envio"] = None
-        st.session_state["intentos_confirmacion_envio"] = 0
-        return None
-
-    if intencion == "no":
-        st.session_state["reporte_pendiente_envio"] = None
-        st.session_state["intentos_confirmacion_envio"] = 0
-        return (
-            "Entendido, no lo envío. Si más adelante lo necesitas, "
-            "solicítalo y con gusto lo preparo.",
-            categoria_badge,
+    # 1. Aplicar Guardrail de validación
+    es_valido = False
+    if canal == "gmail":
+        es_valido = (
+            re.match(r"[^@]+@gmail\.com", pregunta_usuario)
+            or "jurado" in pregunta_usuario
         )
+    elif canal == "telegram":
+        es_valido = len(pregunta_usuario) >= 10 and "+" in pregunta_usuario
 
-    if intencion == "afirmativo_sin_canal":
-        st.session_state["intentos_confirmacion_envio"] = (
-            st.session_state.get("intentos_confirmacion_envio", 0) + 1
-        )
-        return (
-            "Perfecto — ¿te lo envío por **Gmail** o por **Telegram**?",
-            categoria_badge,
-        )
+    if not es_valido:
+        return f"⚠️ Formato de {canal} inválido. Por favor, asegúrate de ingresar un dato válido (ej: nombre@gmail.com o +58...). Intenta de nuevo."
 
-    # Ambiguo: si parece pregunta nueva, soltamos el estado y dejamos
-    # que el flujo normal la clasifique — no queremos atrapar al usuario.
-    if _parece_pregunta_nueva(pregunta):
-        st.session_state["reporte_pendiente_envio"] = None
-        st.session_state["intentos_confirmacion_envio"] = 0
-        return None  # señal para procesar(): continuar flujo normal
+    # 2. Ejecutar Envío (Aquí colocarías tu lógica real)
+    try:
+        # Enviar_Reporte_Logica(canal, pregunta_usuario, reporte)
+        print(f"Enviando reporte a {pregunta_usuario} por {canal}...")
 
-    intentos = st.session_state.get("intentos_confirmacion_envio", 0) + 1
-    st.session_state["intentos_confirmacion_envio"] = intentos
+        # 3. Limpieza y Cierre de Sesión
+        st.session_state.proceso_envio = {
+            "activo": False,
+            "canal": None,
+            "paso": None,
+            "reporte": None,
+        }
 
-    if intentos >= 2:
-        st.session_state["reporte_pendiente_envio"] = None
-        st.session_state["intentos_confirmacion_envio"] = 0
-        return (
-            "Sin problema, lo dejamos así por ahora. Si quieres el "
-            "reporte más tarde, solo dímelo 💜",
-            categoria_badge,
-        )
+        # Limpiamos mensajes si quieres "borrón y cuenta nueva" total
+        st.session_state.mensajes = []
 
-    return (
-        "¿Quieres que te envíe el reporte? Dime **Gmail**, **Telegram** "
-        "o **no** si prefieres dejarlo así.",
-        categoria_badge,
-    )
+        return f"✅ ¡Reporte enviado exitosamente a **{pregunta_usuario}**! \n\nGracias por confiar en ViolTech. La sesión ha sido finalizada por seguridad. Puedes iniciar una nueva consulta cuando gustes."
 
-
-def es_destino_seguro(destino, tipo_canal):
-    """
-    Este es nuestro GUARDRAIL.
-    Puedes definir reglas: ej. solo correos @empresa.com o números específicos.
-    """
-    if tipo_canal == "gmail":
-        # Guardrail: Solo permitir correos de prueba permitidos
-        return re.match(r"[^@]+@gmail\.com", destino) or "jurado" in destino
-    elif tipo_canal == "telegram":
-        # Guardrail: Validar que sea un número (ej: +58...)
-        return len(destino) >= 10
-    return False
+    except Exception as e:
+        return f"❌ Hubo un error al enviar el reporte: {str(e)}. Por favor, inténtalo más tarde."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -725,6 +731,7 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str):
         Genera visualizaciones automáticas del DataFrame.
         Usar con: 'crea un gráfico', 'plotea', 'visualiza',
         'muestra la distribución', 'grafica'.
+        Si falla, reporta el error técnico.
         """
         # Definimos los contextos de columnas
         datasets = {
@@ -763,23 +770,30 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str):
         # Usamos el contexto real que nos pasa el Router
         contexto = "CHURN" if "Churn" in nombre_df else "FINANZAS"
 
+        if contexto == "FINANZAS":
+            # Bloqueamos el uso de términos prohibidos
+            if any(w in pregunta.lower() for w in ["tenure", "contrato"]):
+                return "Error: Los datos de Finanzas (Superstore) no tienen información de 'tenure' o 'contrato'. Por favor, solicita un gráfico basado en 'ganancia', 'ventas' o 'descuentos'."
+
         columnas_reales = datasets[contexto]
 
         columnas_str = ", ".join(columnas_reales)
 
         try:
             plantilla = PromptTemplate.from_template(
-                "Eres experto en Data Viz. Analiza la solicitud y los datos.\n"
+                "Eres experto en Data Viz con Python. Analiza la solicitud y los datos.\n"
                 "Dataset: {contexto}\n"
                 "Columnas disponibles: {columnas}\n\n"
                 "Reglas ESTRICTAS e INQUEBRANTABLES:\n"
-                "1. El DataFrame ya está cargado como la variable 'df'. NO intentes leer archivos ni definir 'df'.\n"
-                "2. Usa SOLAMENTE nombres de columnas exactos de la lista.\n"
-                "3. Si el usuario pide contrato y 'Contract' no existe, créala: df['Contract'] = df['tenure'].apply(lambda x: 'Mensual' if x >= 10 else 'Anual')\n"
-                "4. IMPORTANTE SEABORN: Si usas 'palette', es OBLIGATORIO asignar también 'hue' a la misma variable categórica y usar 'legend=False' para evitar advertencias de deprecación.\n"
-                "5. INGENIERIA DE DATOS: Si el usuario solicita o pide analizar por 'tipo de contrato' o 'contrato', DEBES crear una columna temporal antes de graficar usando exactamente esta lógica: df['contrato'] = df['tenure'].apply(lambda x: 'Mensual' if x <= 10 else 'Anual')\n"
-                "6. Genera ÚNICA y EXCLUSIVAMENTE código Python válido. Cero texto, cero comentarios, cero bloques de markdown.\n"
-                "7. NO incluyas 'plt.show()'.\n"
+                "1. El DataFrame 'df' ya está cargado. NO intentes leer archivos.\n"
+                "2. Usa SOLAMENTE nombres de columnas exactos de la lista. Si una columna no existe, NO la uses.\n"
+                "3. LÓGICA DE CONTRATO: Solo si el dataset contiene la columna 'tenure' y el usuario pide 'tipo de contrato', "
+                "ejecuta obligatoriamente: df['contrato'] = df['tenure'].apply(lambda x: 'Mensual' if x <= 10 else 'Anual')\n"
+                "4. SEABORN: Si usas 'palette', es OBLIGATORIO usar 'hue' igual a la variable categórica y 'legend=False'.\n"
+                "5. SALIDA: Genera ÚNICA y EXCLUSIVAMENTE código Python válido. Cero texto, cero comentarios, cero bloques de markdown.\n"
+                "6. NO incluyas 'plt.show()'.\n"
+                "7. PREVENCIÓN DE ERRORES: Si el dataset es 'FINANZAS', ignora cualquier solicitud relacionada con 'contrato' o 'tenure' "
+                "y reporta un error técnico simple: 'Dataset no contiene datos de contrato'.\n"
                 "Solicitud: {pregunta}"
             )
             codigo_bruto = (plantilla | llm | StrOutputParser()).invoke(
@@ -834,7 +848,7 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str):
             finally:
                 plt.close("all")
         except Exception as ex:
-            return f"❌ Error al generar gráfico: {str(ex)}"
+            return f"❌ Error en la ejecución del código: {str(e)}. Intenta con otras columnas."
 
     @tool("Consulta Rapida Churn", return_direct=True)
     def consulta_rapida_churn(pregunta: str) -> str:
@@ -1348,12 +1362,22 @@ def obtener_memoria(historial: list) -> ConversationBufferWindowMemory:
         input_key="input",
         output_key="output",
     )
-    for msg in historial[-(VENTANA_MEMORIA * 2) :]:
+    mensajes = historial[-(VENTANA_MEMORIA * 2) :]
+    for msg in mensajes:
         if msg["rol"] == "user":
             memoria.chat_memory.add_user_message(msg["contenido"])
         elif msg["rol"] == "assistant":
-            memoria.chat_memory.add_ai_message(msg["contenido"])
+            # Filtramos mensajes que solo son código o basura técnica si existen
+            if "[IMG_B64" not in msg["contenido"]:
+                memoria.chat_memory.add_ai_message(msg["contenido"])
+
     return memoria
+    # for msg in historial[-(VENTANA_MEMORIA * 2) :]:
+    #     if msg["rol"] == "user":
+    #         memoria.chat_memory.add_user_message(msg["contenido"])
+    #     elif msg["rol"] == "assistant":
+    #         memoria.chat_memory.add_ai_message(msg["contenido"])
+    # return memoria
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1403,6 +1427,16 @@ Question: {input}
 Thought:{agent_scratchpad}""")
 
 
+def _handle_error(error) -> str:
+    error_str = str(error)
+    return (
+        f"El formato anterior es incorrecto: {error_str}. "
+        "DEBES responder obligatoriamente siguiendo esta estructura exacta: "
+        "Thought: ¿qué debo hacer?\nAction: nombre de la herramienta\nAction Input: argumento\n"
+        "Si no tienes el dato, imprime df.columns para verlo. ¡NO respondas al usuario hasta tener el resultado!"
+    )
+
+
 def construir_agente(df, vector_store, nombre_df: str, historial: list):
     herramientas = crear_herramientas(df, vector_store, nombre_df)
     memoria = obtener_memoria(historial)
@@ -1414,10 +1448,7 @@ def construir_agente(df, vector_store, nombre_df: str, historial: list):
         verbose=True,
         max_iterations=8,
         max_execution_time=60,
-        handle_parsing_errors=(
-            "Error de formato. Intenta de nuevo siguiendo el formato: "
-            "Thought/Action/Action Input/Observation/Final Answer"
-        ),
+        handle_parsing_errors=_handle_error,
         return_intermediate_steps=False,
         early_stopping_method="force",
     )
@@ -1431,16 +1462,44 @@ def construir_agente(df, vector_store, nombre_df: str, historial: list):
 def procesar(pregunta: str, dfs: dict, vector_store, historial: list):
     """Router → agente correcto → respuesta sin alucinaciones."""
 
-    # Interceptor de flujo (cero tokens de Cohere)
-    tipo_reporte_pendiente = st.session_state.get("reporte_pendiente_envio")
+    # --- INTERCEPTOR DE ENVÍO (NUEVO) ---
+    # ── 1. INTERCEPTOR DE ENVÍO (PRIORIDAD MÁXIMA) ──────────────────────────
+    # Si estamos esperando activamente un correo o un teléfono:
+    if st.session_state.get("proceso_envio", {}).get("activo"):
+        resultado = manejar_datos_contacto(pregunta)
+        return resultado, "ACCION_ENVIO"
 
-    if tipo_reporte_pendiente:
-        resultado_estado = _manejar_confirmacion_envio(pregunta, tipo_reporte_pendiente)
+    canal = st.session_state.get("proceso_envio", {}).get("canal", "correo o Telegram")
+    p_lower = pregunta.lower().strip()
+    if any(m in p_lower for m in ["gmail", "telegram"]):
+        # ... (tu lógica de inicio de envío que ya tienes)
+        return f"Perfecto. Por favor, indícame tu {canal}...", "ACCION_ENVIO"
 
-        if resultado_estado is not None:
-            return resultado_estado[0], resultado_estado[1]
-
+    # ── 2. CLASIFICACIÓN DE LA INTENCIÓN ────────────────────────────────────
     categoria = clasificar(pregunta)
+
+    # ── 3. ACTIVACIÓN DEL MODO ENVÍO ────────────────────────────────────────
+    # Si el router detecta que el usuario quiere enviar algo
+    if categoria == "ACCION_ENVIO" or any(m in p_lower for m in ["gmail", "telegram"]):
+        canal = "gmail" if "gmail" in p_lower else "telegram"
+
+        # Activamos el estado de envío y conservamos el reporte actual
+        st.session_state.proceso_envio = {
+            "activo": True,
+            "canal": canal,
+            "paso": "esperando_contacto",
+            "reporte": st.session_state.get("proceso_envio", {}).get("reporte"),
+        }
+
+        ejemplo = (
+            "ejemplo: nombre@correo.com"
+            if canal == "gmail"
+            else "ejemplo: +584121234567"
+        )
+        return (
+            f"Perfecto. Por favor, indícame tu {canal} para el envío ({ejemplo}).",
+            "ACCION_ENVIO",
+        )
 
     # 2. Guardamos el contexto del reporte activo en memoria
     if categoria in "CHURN, FINANZAS":
@@ -1460,7 +1519,7 @@ def procesar(pregunta: str, dfs: dict, vector_store, historial: list):
 
     if categoria == "POLITICAS":
         try:
-            docs = vector_store.similarity_search(pregunta, k=4)
+            docs = vector_store.invoke(pregunta)
             contexto = "\n\n".join(d.page_content for d in docs)
             plantilla = PromptTemplate.from_template(
                 "Eres Violet, analista de ViolTech. Responde en español "
@@ -1507,6 +1566,27 @@ def procesar(pregunta: str, dfs: dict, vector_store, historial: list):
             f"Detalle técnico: {str(ex)}",
             categoria,
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MANEJO DE DATOS DE CONTACTO — VIOLET
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def manejar_datos_contacto(dato: str):
+    canal = st.session_state.proceso_envio["canal"]
+
+    # Aquí iría tu lógica real de envío (smtplib o API Telegram)
+    # enviar_al_canal(canal, dato, st.session_state.proceso_envio["reporte"])
+
+    # LIMPIEZA TOTAL (Cierre de ciclo)
+    st.session_state.proceso_envio = {"activo": False, "canal": None, "paso": None}
+    st.session_state.ultima_categoria = None
+
+    # Forzar recarga de la app para "borrar" el chat
+    st.rerun()
+
+    return f"✅ Reporte enviado exitosamente a {dato}. Chat finalizado para proteger tu información. ¡Hasta pronto!"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1628,6 +1708,14 @@ def main():
     except Exception as e:
         st.error(f"Error: {e}")
         return  # Detener si no hay datos
+
+    if "proceso_envio" not in st.session_state:
+        st.session_state.proceso_envio = {
+            "activo": False,
+            "canal": None,
+            "paso": None,
+            "reporte": None,
+        }
 
     # ── Input del usuario ─────────────────────────────────────────────────────
     pregunta = st.chat_input("¿En qué puedo ayudarte?")
