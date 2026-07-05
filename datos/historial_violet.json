@@ -1,20 +1,11 @@
 [
   {
     "rol": "user",
-    "contenido": "Crea un gráfico de la tasa de churn por tipo de contrato"
+    "contenido": "¿Cómo funciona el router de Violet?"
   },
   {
     "rol": "assistant",
-    "contenido": "Error ejecutando código del gráfico: invalid syntax (<string>, line 26)",
-    "categoria": "FINANZAS"
-  },
-  {
-    "rol": "user",
-    "contenido": "Crea un gráfico de la tasa de churn por tipo de contrato"
-  },
-  {
-    "rol": "assistant",
-    "contenido": "Error ejecutando código del gráfico: invalid syntax (<string>, line 26)",
-    "categoria": "CHURN"
+    "contenido": "Lo siento, mi especialidad es el análisis de datos de clientes y reportes de gestión para ViolTech. No tengo información sobre eventos deportivos o temas fuera de nuestro dataset. ¿Te gustaría analizar alguna métrica de retención o finanzas?",
+    "categoria": "FUERA_DE_CONTEXTO"
   }
 ]
