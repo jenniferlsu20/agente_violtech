@@ -3,11 +3,14 @@ fpdf
 langchain 
 langchain-cohere 
 langchain-community
+langchain-core
 langchain-experimental
 langchain-text-splitters
 faiss-cpu 
 pypdf 
+pymupdf
 pandas 
+rank-bm25
 streamlit 
 python-dotenv
 matplotlib
