@@ -33,6 +33,7 @@ import matplotlib.pyplot as plt
 import requests
 import smtplib
 import pickle
+import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -232,13 +233,19 @@ PROMPT_ROUTER = PromptTemplate.from_template("""
 Clasifica esta pregunta en UNA categoría. Responde SOLO la categoría, sin explicación.
 
 Categorías:
-- CHURN: clientes, riesgo churn, churn_prob, risk_level, tenure, telecomunicaciones,
-  fibra, TechSupport, segmento critico, MonthlyCharges, TelcoVenezuela
-- FINANZAS: ventas, ganancias, márgenes, descuentos, Technology, Furniture,
-  Office Supplies, Consumer, Corporate, Home Office, Superstore, pérdidas, Tables
-- POLITICAS: definiciones, estrategias, reglas, políticas, glosario, manual,
-  qué es, cómo funciona Violet, arquitectura del agente
-- FUERA_SCOPE: preguntas sin relación con los datos de ViolTech
+- POLITICAS: Úsala para cualquier pregunta que involucre CONCEPTOS, TEORÍAS, DEFINICIONES,
+SIGNIFICADOS o REGLAS (por ejemplo, "regla del 20%"). También aplica para estrategias de la 
+empresa, manuales, glosarios y preguntas sobre la arquitectura o funcionamiento de Violet.
+- CHURN: Úsala SOLO para consultar DATOS NUMÉRICOS, MÉTRICAS o ESTADÍSTICAS sobre retención 
+de clientes, riesgo de abandono (churn, churn_prob, risk_level), telecomunicaciones, fibra, 
+soporte técnico, o variables de usuarios (tenure, MonthlyCharges, TelcoVenezuela).
+- FINANZAS: Úsala SOLO para consultar DATOS NUMÉRICOS, MÉTRICAS o REPORTES sobre reportes de 
+ventas, ganancias, márgenes, o categorías de productos, sugcategorias de productos, descuentos, 
+Technology, Furniture, Office Supplies, Consumer, Corporate, Home Office, Superstore, pérdidas, 
+Tables.
+- FUERA_SCOPE: Úsala SOLO Y ESTRICTAMENTE para temas que no tengan absolutamente nada que 
+ver con análisis de datos, ViolTech, finanzas, telecomunicaciones o políticas de la empresa 
+(ej. deportes, clima, recetas de cocina).
 
 Pregunta: {pregunta}
 Categoría:""")
@@ -263,10 +270,13 @@ def clasificar(pregunta: str) -> str:
         "riesgo bajo",
         "en riesgo",
         "probabilidad de churn",
+        "probabilidad de abandono",
         "clientes en riesgo",
         "clientes de riesgo",
         "contrato mensual",
         "contrato anual",
+        "tasa de churn",
+        "tasa de abandono",
     ]
     for frase in frases_churn_exactas:
         if frase in p:
@@ -283,30 +293,68 @@ def clasificar(pregunta: str) -> str:
         "sub-categoria",
         "regla del 20",
         "umbral del 20",
+        "ventas totales",
+        "ganancia total",
+        "ganancias totales",
     ]
     for frase in frases_finanzas_exactas:
         if frase in p:
             return "FINANZAS"
 
-    # ── Palabras clave ──────────────────────────────────────────
-    if any(
-        accion in p for accion in ["gmail", "telegram", "correo", "email", "enviar"]
-    ):
-        return "ACCION_ENVIO"
-
     frases_exactas = [
+        "qué significa",
+        "que significa",
+        "qué es ",
+        "que es ",
+        "qué son",
+        "que son",
+        "qué hace",
+        "que hace",
+        "cómo funciona routerdatos",
+        "como funciona router",
+        "cómo funciona violet",
+        "como funciona violet",
+        "cómo se define",
+        "como se define",
+        "definición de",
+        "definicion de",
+        "explica qué",
+        "explica que",
+        "qué herramientas",
+        "que herramientas",
+        "qué puede",
+        "que puede",
+        "para qué sirve",
+        "para que sirve",
+        "cuál es la diferencia",
+        "cual es la diferencia",
+        "qué diferencia",
+        "que diferencia",
+        "qué es violet",
+        "que es violet",
         "cómo funciona violet",
         "como funciona violet",
         "qué es violet",
         "que es violet",
-        "qué puede hacer",
-        "que puede hacer",
+        "manual de violet",
+        "manual del agente",
+        "política de retención",
+        "politica de retencion",
+        "política de descuentos",
+        "politica de descuentos",
         "regla del 20",
         "regla del 20%",
+        "umbral del 20",
     ]
     for frase in frases_exactas:
         if frase in p:
             return "POLITICAS"
+
+    # ── palabras clave ──────────────────────────────────────────
+    if any(
+        accion in p for accion in ["gmail", "telegram", "correo", "email", "enviar"]
+    ):
+        return "ACCION_ENVIO"
 
     # CHURN - palabras inequívocas primero
     for w in [
@@ -1798,15 +1846,46 @@ def main():
     )
 
     st.markdown(CSS_VIOLTECH, unsafe_allow_html=True)
-    st.image("imagen/encabezado_de_correo_banner.png", width="stretch")
+
+    # Encabezado y botón about me
+    # 1. ENCABEZADO Y BOTÓN ABOUT ME
+    col1, col2 = st.columns([0.85, 0.15])
+    with col1:
+        st.image(
+            "imagen/encabezado_de_correo_banner.png", width="stretch"
+        )  # width="stretch" puede dar error, usa None o un valor
+    with col2:
+        if "show_about" not in st.session_state:
+            st.session_state.show_about = False
+
+        if st.button("ℹ️ Acerca de Violet"):
+            st.session_state.show_about = True
+
+        if st.session_state.show_about:
+            st.info("""
+            ### Violet v1.0.0
+            **Analista de Inteligencia de Negocios**
+            
+            Especialista en:
+            - 📊 Churn Predictivo
+            - 📈 Análisis Financiero
+            - 📑 Políticas e Información Violtech
+            - 🛡️ Gestión de Datos Segura
+            
+            Desarrollado por: Jennifer | 
+            Alura ONE Challenge
+            """)
+
+            time.sleep(5)
+            st.session_state.show_about = False
+            st.rerun()
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
-        # Título y logo limpio
         st.markdown(
             """
         <div style="text-align:center; padding:1rem 0">
-            <h2 style="color: #2c3e50; ; font-size: 2.9rem; margin: 0;">Violet</h2>
+            <h2 style="color: #2c3e50; font-size: 2.9rem; margin: 0;">Violet</h2>
             <p style="color: #7f8c8d; font-size: 0.9rem;">Agente de Inteligencia de Negocios ViolTech</p>
         </div>
         """,
@@ -1814,8 +1893,6 @@ def main():
         )
 
         st.markdown("---")
-
-        # Descripción técnica simplificada
         st.markdown("### ⚙️ Configuración del Sistema")
         st.markdown(
             """
@@ -1830,14 +1907,14 @@ def main():
 
         st.markdown("---")
         st.markdown("### Áreas de Análisis:")
-        st.markdown("- **CHURN:** Gestión de Retención")
-        st.markdown("- **FINANZAS:** Análisis Superstore")
-        st.markdown("- **POLÍTICAS:** Base de Conocimiento")
+        st.markdown(
+            "- **CHURN:** Gestión de Retención\n- **FINANZAS:** Análisis Superstore\n- **POLÍTICAS:** Base de Conocimiento"
+        )
         st.markdown("---")
 
         if st.button("🗑️ Nueva conversación", use_container_width=True):
             st.session_state.mensajes = []
-            st.session_state.ultima_categoria = None  # ✅ Limpiamos el contexto
+            st.session_state.ultima_categoria = None
             if RUTA_HISTORIAL.exists():
                 RUTA_HISTORIAL.unlink()
             st.rerun()
@@ -1962,6 +2039,37 @@ def main():
                 "¿Qué significa Churn?",
             ]:
                 st.code(ej, language=None)
+
+    def render_footer():
+
+        st.markdown(
+            """
+            <style>
+            /* Elimina el margen superior e inferior del contenedor del footer */
+            div[data-testid="stMarkdownContainer"] p {
+                margin-top: 0px !important;
+                margin-bottom: 0px !important;
+            }
+            /* Ajusta el contenedor general para que esté pegado */
+            .footer-container {
+                padding-top: 0px !important;
+                padding-bottom: 0px !important;
+                font-size: 12px;
+                color: gray;
+                text-align: left;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            '<div class="footer-container">© 2026 ViolTech | Violet es una IA y puede cometer errores. En periodo de prueba</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Llamada al final de todo el código principal
+    render_footer()
 
 
 if __name__ == "__main__":
