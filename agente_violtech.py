@@ -33,7 +33,9 @@ import matplotlib.pyplot as plt
 import requests
 import smtplib
 import pickle
-from email.message import EmailMessage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 import seaborn as sns
 import streamlit as st
 from fpdf import FPDF
@@ -64,8 +66,8 @@ VIOLETA_SUAVE = "#F3EEFF"
 DORADO = "#C9A84C"
 
 # ── Configuración ─────────────────────────────────────────────────────────────
-GMAIL_USER = os.getenv("GMAIL_USER")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_APP_PASSWORD = os.getenv("SMTP_APP_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
@@ -430,6 +432,67 @@ def cargar_dataframes():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _manejar_confirmacion_envio(canal: str, destino: str = None) -> str:
+    """
+    Orquesta la conversión del reporte activo a PDF y ejecuta el envío real.
+    - canal: 'gmail' o 'telegram'
+    - destino: Correo electrónico (solo requerido para Gmail)
+    """
+    tipo_reporte = st.session_state.get("tipo_reporte_activo")
+
+    # 1. Recuperar el texto correcto según el tipo de reporte
+    if tipo_reporte == "churn":
+        texto_reporte = st.session_state.get("ultimo_reporte_churn")
+    elif tipo_reporte == "financiero":
+        texto_reporte = st.session_state.get("ultimo_reporte_financiero")
+    else:
+        # Fallback por si se llama sin un reporte específico
+        texto_reporte = st.session_state.get("proceso_envio", {}).get("reporte")
+
+    if not texto_reporte:
+        return "❌ Error: No encontré el contenido del reporte en memoria. Por favor, genéralo de nuevo."
+
+    # 2. Generar el documento PDF
+    try:
+        # Asegúrate de que tu función generar_pdf_reporte retorne un io.BytesIO
+        buffer_pdf = generar_pdf_reporte(texto_reporte, tipo_reporte)
+    except Exception as e:
+        return f"❌ Error al estructurar el PDF: {str(e)}"
+
+    # 3. Ejecutar los motores de envío
+    try:
+        if canal == "gmail":
+            if not destino:
+                return (
+                    "❌ Error: Se requiere un correo de destino para enviar por Gmail."
+                )
+            resultado = enviar_por_gmail(buffer_pdf, destino)
+
+        elif canal == "telegram":
+            resultado = enviar_por_telegram(buffer_pdf)
+
+        else:
+            return "❌ Canal de envío no reconocido."
+
+        # 4. Evaluación del resultado y limpieza
+        if "Error" in resultado:
+            return f"❌ Hubo un inconveniente con los servidores de envío: {resultado}"
+
+        # Limpiamos los estados relacionados al envío para evitar bucles
+        st.session_state.proceso_envio = {
+            "activo": False,
+            "canal": None,
+            "paso": None,
+            "reporte": None,
+        }
+        st.session_state["fase_reporte"] = None
+
+        return f"✅ ¡El reporte en PDF ha sido generado y enviado exitosamente vía {canal.capitalize()}!"
+
+    except Exception as e:
+        return f"❌ Error crítico durante el proceso de envío: {str(e)}"
+
+
 def generar_pdf_reporte(texto_reporte: str, tipo_reporte: str) -> io.BytesIO:
     """
     Toma el texto estructurado del reporte y genera un archivo PDF físico.
@@ -467,7 +530,7 @@ def generar_pdf_reporte(texto_reporte: str, tipo_reporte: str) -> io.BytesIO:
     return buffer_pdf
 
 
-def ejecutar_envio_telegram(buffer_pdf: io.BytesIO, destinatario: str) -> str:
+def enviar_por_telegram(buffer_pdf: io.BytesIO) -> str:
     """Maneja la API de Telegram y la seguridad de forma invisible para el LLM."""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id_admin = os.getenv("TELEGRAM_CHAT_ID")  # El ID seguro de tu .env
@@ -477,45 +540,73 @@ def ejecutar_envio_telegram(buffer_pdf: io.BytesIO, destinatario: str) -> str:
 
     url = f"https://api.telegram.org/bot{token}/sendDocument"
 
+    # Aseguramos leer el buffer desde el inicio
+    buffer_pdf.seek(0)
+
+    # Preparamos el archivo para el requests
+    archivos = {
+        "document": ("Reporte_ViolTech.pdf", buffer_pdf.read(), "application/pdf")
+    }
+
+    # Preparamos el mensaje que acompaña el PDF
+    datos = {
+        "chat_id": chat_id_admin,
+        "caption": "📦 *Reporte Solicitado vía Violet*\n\nAquí tienes el informe de la sesión actual.",
+        "parse_mode": "Markdown",
+    }
+
     try:
-        # El buffer listo para ser enviado
-        files = {"document": ("reporte.pdf", buffer_pdf, "application/pdf")}
-        datos = {"chat_id": chat_id_admin, "caption": "🔒 Reporte confidencial."}
-        respuesta = requests.post(url, data=datos, files=files)
+        respuesta = requests.post(url, data=datos, files=archivos, timeout=15)
+        resultado = respuesta.json()
 
-        return (
-            "enviado a tu chat de Telegram"
-            if respuesta.status_code == 200
-            else f"Fallo API: {respuesta.status_code}"
-        )
+        if not resultado.get("ok"):
+            return f"Error Telegram: {resultado.get('description')}"
+        return "enviado por Telegram"
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error Telegram: {str(e)}"
 
 
-def ejecutar_envio_gmail(buffer_pdf: io.BytesIO, destinatario: str):
+def enviar_por_gmail(buffer_pdf: io.BytesIO, destinatario: str):
     """Envía el PDF vía SMTP de Google."""
     # Credenciales desde variables de entorno
-    EMAIL_USER = os.getenv("GMAIL_USER")
-    EMAIL_PASS = os.getenv("GMAIL_APP_PASSWORD")
+    EMAIL_USER = os.getenv("SMTP_USER")
+    EMAIL_PASS = os.getenv("SMTP_APP_PASSWORD")
 
-    msg = EmailMessage()
-    msg["Subject"] = "Reporte ViolTech"
+    if not EMAIL_USER or not EMAIL_PASS:
+        return "Error: Credenciales de SMTP no configuradas en el entorno."
+
+    # 1. Crear el contenedor principal
+    msg = MIMEMultipart()
+    msg["Subject"] = "📊 Reporte Automatizado de Inteligencia de Negocio — ViolTech"
     msg["From"] = EMAIL_USER
     msg["To"] = destinatario
-    msg.set_content(
-        "Hola, adjunto encontrarás el reporte solicitado generado por el agente Violet."
-    )
 
-    # El buffer se lee desde el inicio
+    # 2. Adjuntar el cuerpo del texto
+    cuerpo = (
+        f"Hola,\n\n"
+        f"Adjunto a este correo encontrarás el informe que solicitaste a través de Violet:\n\n"
+        f"──────────────────────────────────────────────────\n"
+        f"{buffer_pdf}\n"
+        f"──────────────────────────────────────────────────\n\n"
+        f"Este es un envío automático gestionado por el agente de IA de ViolTech.\n"
+        f"Si tienes dudas adicionales, puedes iniciar una nueva consulta en la aplicación."
+    )
+    msg.attach(MIMEText(cuerpo, "plain", "utf-8"))
+
+    # 3. Leer el buffer y adjuntar el PDF
     buffer_pdf.seek(0)
-    msg.add_attachment(
-        buffer_pdf.read(), maintype="application", subtype="pdf", filename="reporte.pdf"
-    )
+    pdf_adjunto = MIMEApplication(buffer_pdf.read(), _subtype="pdf")
 
+    # 4. Configurar las cabeceras del archivo adjunto
+    pdf_adjunto.add_header("Content-Disposition", "attachment", filename="reporte.pdf")
+    msg.attach(pdf_adjunto)
+
+    # 5. Envío vía SMTP
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
             smtp.login(EMAIL_USER, EMAIL_PASS)
-            smtp.send_message(msg)
+            # Usamos as_string() que es el método nativo para MIMEMultipart
+            smtp.sendmail(EMAIL_USER, destinatario, msg.as_string())
         return "enviado por Gmail"
     except Exception as e:
         return f"Error Gmail: {str(e)}"
@@ -554,51 +645,6 @@ PALABRAS_AFIRMATIVAS = (
 )
 
 
-def _detectar_intencion_envio(texto: str) -> str:
-    """Clasifica la respuesta del usuario sin usar el LLM — cero tokens."""
-    t = texto.lower().strip()
-    if any(w in t for w in PALABRAS_TELEGRAM):
-        return "telegram"
-    if any(w in t for w in PALABRAS_GMAIL):
-        return "gmail"
-    if any(t == w or t.startswith(w + " ") or t == w + "." for w in PALABRAS_NEGATIVAS):
-        return "no"
-    if any(
-        t == w or t.startswith(w + " ") or t == w + "." for w in PALABRAS_AFIRMATIVAS
-    ):
-        return "afirmativo_sin_canal"
-    return "ambiguo"
-
-
-def _parece_pregunta_nueva(texto: str) -> bool:
-    """
-    Heurística barata: si el mensaje trae vocabulario claro de otro tema,
-    asumimos que el usuario cambió de intención en lugar de responder
-    la oferta de envío — y lo dejamos fluir al router normal.
-    """
-    t = texto.lower()
-    disparadores = (
-        "churn",
-        "riesgo",
-        "ventas",
-        "ganancia",
-        "margen",
-        "descuento",
-        "cliente",
-        "categoría",
-        "categoria",
-        "segmento",
-        "política",
-        "politica",
-        "gráfico",
-        "grafico",
-        "reporte",
-    )
-    tiene_palabra_clave = any(w in t for w in disparadores)
-    es_largo = len(t.split()) >= 6
-    return tiene_palabra_clave or es_largo
-
-
 def manejar_datos_contacto(pregunta_usuario: str):
     """
     Gestiona el envío del reporte, aplica los guardrails
@@ -607,21 +653,39 @@ def manejar_datos_contacto(pregunta_usuario: str):
     canal = st.session_state.proceso_envio["canal"]
     reporte = st.session_state.proceso_envio["reporte"]
 
+    # Si por alguna razón el reporte está vacío, evitamos enviarlo
+    if not reporte:
+        st.session_state.proceso_envio = {
+            "activo": False,
+            "canal": None,
+            "paso": None,
+            "reporte": None,
+        }
+        return "⚠️ No hay ningún análisis o reporte activo en memoria para enviar. Por favor, realiza una consulta primero."
+
     # 1. Aplicar Guardrail de validación
-    es_valido = False
+    destino = pregunta_usuario.strip()
+
     if canal == "gmail":
         es_valido = (
-            re.match(r"[^@]+@gmail\.com", pregunta_usuario)
-            or "jurado" in pregunta_usuario
+            re.match(r"[^@]+@gmail\.com", destino.lower())
+            or "jurado" in destino.lower()
         )
+        if not es_valido:
+            return "⚠️ Formato de correo inválido. Asegúrate de ingresar una dirección válida de Gmail (ej: nombre@gmail.com)."
     elif canal == "telegram":
-        es_valido = len(pregunta_usuario) >= 10 and "+" in pregunta_usuario
+        es_valido = destino.isdigit() or (
+            destino.startswith("-") and destino[1:].isdigit()
+        )
+        if not es_valido:
+            return "⚠️ Identificador de Telegram inválido. Por favor, introduce tu ID numérico de chat (puedes obtenerlo escribiendo a @userinfobot en Telegram)."
 
-    if not es_valido:
-        return f"⚠️ Formato de {canal} inválido. Por favor, asegúrate de ingresar un dato válido (ej: nombre@gmail.com o +58...). Intenta de nuevo."
-
-    # 2. Ejecutar Envío (Aquí colocarías tu lógica real)
+    # 2. Ejecutar Envío
     try:
+        if canal == "gmail":
+            enviar_por_gmail(destino, reporte)
+        elif canal == "telegram":
+            enviar_por_telegram(destino, reporte)
         # Enviar_Reporte_Logica(canal, pregunta_usuario, reporte)
         print(f"Enviando reporte a {pregunta_usuario} por {canal}...")
 
@@ -636,7 +700,11 @@ def manejar_datos_contacto(pregunta_usuario: str):
         # Limpiamos mensajes si quieres "borrón y cuenta nueva" total
         st.session_state.mensajes = []
 
-        return f"✅ ¡Reporte enviado exitosamente a **{pregunta_usuario}**! \n\nGracias por confiar en ViolTech. La sesión ha sido finalizada por seguridad. Puedes iniciar una nueva consulta cuando gustes."
+        return (
+            f"✅ ¡El reporte ha sido enviado exitosamente a **{destino}** vía **{canal.capitalize()}**!\n\n"
+            f"La tarea de exportación concluyó con éxito. He restablecido el entorno seguro de consulta. "
+            f"¿Hay alguna otra métrica o análisis que desees revisar?"
+        )
 
     except Exception as e:
         return f"❌ Hubo un error al enviar el reporte: {str(e)}. Por favor, inténtalo más tarde."
@@ -1075,15 +1143,18 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str):
             lineas += [
                 "",
                 "---",
-                "*¿Quieres que envíe este reporte por correo o Telegram? "
-                "Dime y lo gestiono de inmediato *",
+                "**Siguiente paso:**",
+                "¿Deseas acompañar este reporte con un **gráfico** (ej. distribución de riesgo) o pasamos directamente a **enviarlo por correo/Telegram**?",
             ]
 
             texto_final = "\n".join(lineas)
             st.session_state["ultimo_reporte_churn"] = (
                 texto_final  # ¡Guardamos en memoria!
             )
-            st.session_state["reporte_pendiente_envio"] = "churn"
+
+            st.session_state["fase_reporte"] = "esperando_grafico_o_envio"
+            st.session_state["tipo_reporte_activo"] = "churn"
+
             return texto_final
 
         except Exception as ex:
@@ -1138,7 +1209,7 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str):
                 "• `Distribución de ganancias por categoría`",
                 "• `Tendencia de ventas por segmento`",
                 "• `Mapa de pérdidas por subcategoría`",
-                "\n*Solo indícame cuál prefieres o si deseas otro tipo de análisis.*",
+                "\n*Solo indícame cuál prefieres o si deseas pasar directamente a **enviarlo por correo/Telegram.**",
             ]
 
             # Lógica para detectar contexto previo y personalizar sugerencia
@@ -1159,7 +1230,9 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str):
             st.session_state["ultimo_reporte_financiero"] = (
                 texto_final  # ¡Guardamos en memoria!
             )
-            st.session_state["reporte_pendiente_envio"] = "financiero"
+            st.session_state["fase_reporte"] = "esperando_grafico_o_envio"
+            st.session_state["tipo_reporte_activo"] = "financiero"
+
             return texto_final
 
         except Exception as ex:
@@ -1327,9 +1400,9 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str):
 
         # 4. Integración con APIs usando el destino validado
         if canal.lower() == "gmail":
-            status = ejecutar_envio_gmail(buffer_pdf, destino)
+            status = enviar_por_gmail(buffer_pdf, destino)
         elif canal.lower() == "telegram":
-            status = ejecutar_envio_telegram(buffer_pdf, destino)
+            status = enviar_por_telegram(buffer_pdf, destino)
         else:
             return f"Canal '{canal}' no soportado."
 
@@ -1462,47 +1535,59 @@ def construir_agente(df, vector_store, nombre_df: str, historial: list):
 def procesar(pregunta: str, dfs: dict, vector_store, historial: list):
     """Router → agente correcto → respuesta sin alucinaciones."""
 
-    # --- INTERCEPTOR DE ENVÍO (NUEVO) ---
+    # --- INTERCEPTOR DE ENVÍO ---
     # ── 1. INTERCEPTOR DE ENVÍO (PRIORIDAD MÁXIMA) ──────────────────────────
     # Si estamos esperando activamente un correo o un teléfono:
     if st.session_state.get("proceso_envio", {}).get("activo"):
         resultado = manejar_datos_contacto(pregunta)
         return resultado, "ACCION_ENVIO"
 
-    canal = st.session_state.get("proceso_envio", {}).get("canal", "correo o Telegram")
     p_lower = pregunta.lower().strip()
-    if any(m in p_lower for m in ["gmail", "telegram"]):
-        # ... (tu lógica de inicio de envío que ya tienes)
-        return f"Perfecto. Por favor, indícame tu {canal}...", "ACCION_ENVIO"
 
     # ── 2. CLASIFICACIÓN DE LA INTENCIÓN ────────────────────────────────────
     categoria = clasificar(pregunta)
 
-    # ── 3. ACTIVACIÓN DEL MODO ENVÍO ────────────────────────────────────────
-    # Si el router detecta que el usuario quiere enviar algo
     if categoria == "ACCION_ENVIO" or any(m in p_lower for m in ["gmail", "telegram"]):
+        # 1. Recuperamos el reporte buscando en las nuevas variables de estado de las Tools
+        tipo_reporte = st.session_state.get("tipo_reporte_activo")
+        if tipo_reporte == "churn":
+            reporte_actual = st.session_state.get("ultimo_reporte_churn")
+        elif tipo_reporte == "financiero":
+            reporte_actual = st.session_state.get("ultimo_reporte_financiero")
+        else:
+            # Fallback de seguridad
+            reporte_actual = st.session_state.get("proceso_envio", {}).get("reporte")
+
+        if not reporte_actual:
+            return (
+                "⚠️ No hay ningún reporte activo en memoria para enviar. Genera uno primero.",
+                "ACCION_ENVIO",
+            )
+
         canal = "gmail" if "gmail" in p_lower else "telegram"
 
-        # Activamos el estado de envío y conservamos el reporte actual
-        st.session_state.proceso_envio = {
-            "activo": True,
-            "canal": canal,
-            "paso": "esperando_contacto",
-            "reporte": st.session_state.get("proceso_envio", {}).get("reporte"),
-        }
+        # --- FLUJO TELEGRAM: Envío Inmediato ---
+        if canal == "telegram":
+            # Usamos el nuevo orquestador que hace todo el trabajo (PDF + Envío)
+            resultado = _manejar_confirmacion_envio(canal="telegram")
+            return resultado, "ACCION_ENVIO"
 
-        ejemplo = (
-            "ejemplo: nombre@correo.com"
-            if canal == "gmail"
-            else "ejemplo: +584121234567"
-        )
-        return (
-            f"Perfecto. Por favor, indícame tu {canal} para el envío ({ejemplo}).",
-            "ACCION_ENVIO",
-        )
+        # --- FLUJO GMAIL: Activar espera de correo ---
+        elif canal == "gmail":
+            # Activamos la bandera, pero ya no necesitamos empujar el texto del reporte aquí
+            # porque _manejar_confirmacion_envio lo buscará en la memoria global en el próximo ciclo
+            st.session_state.proceso_envio = {
+                "activo": True,
+                "canal": "gmail",
+                "paso": "esperando_contacto",
+            }
+            return (
+                "Perfecto. Por favor, indícame tu correo de Gmail (ejemplo: nombre@gmail.com).",
+                "ACCION_ENVIO",
+            )
 
-    # 2. Guardamos el contexto del reporte activo en memoria
-    if categoria in "CHURN, FINANZAS":
+    # 3. Guardamos el contexto del reporte activo en memoria
+    if categoria in ["CHURN, FINANZAS"]:
         st.session_state.ultima_categoria = categoria
         st.session_state.reporte_activo = (
             "financiero" if categoria == "FINANZAS" else "churn"
@@ -1566,27 +1651,6 @@ def procesar(pregunta: str, dfs: dict, vector_store, historial: list):
             f"Detalle técnico: {str(ex)}",
             categoria,
         )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MANEJO DE DATOS DE CONTACTO — VIOLET
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def manejar_datos_contacto(dato: str):
-    canal = st.session_state.proceso_envio["canal"]
-
-    # Aquí iría tu lógica real de envío (smtplib o API Telegram)
-    # enviar_al_canal(canal, dato, st.session_state.proceso_envio["reporte"])
-
-    # LIMPIEZA TOTAL (Cierre de ciclo)
-    st.session_state.proceso_envio = {"activo": False, "canal": None, "paso": None}
-    st.session_state.ultima_categoria = None
-
-    # Forzar recarga de la app para "borrar" el chat
-    st.rerun()
-
-    return f"✅ Reporte enviado exitosamente a {dato}. Chat finalizado para proteger tu información. ¡Hasta pronto!"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
