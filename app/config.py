@@ -22,6 +22,8 @@ MODELO_LLM = "command-r-plus-08-2024"
 
 # Claves de API (Se leen desde .env)
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
+
+# Credenciales de Servicio
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_APP_PASSWORD = os.getenv("SMTP_APP_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
