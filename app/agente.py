@@ -1,5 +1,5 @@
-from langchain.agents import create_react_agent, AgentExecutor
-from langchain.memory import ConversationBufferWindowMemory
+from langgraph.prebuilt.chat_agent_executor import create_react_agent
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_cohere import ChatCohere
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -33,20 +33,14 @@ def obtener_memoria(historial: list) -> ConversationBufferWindowMemory:
 def construir_agente(df, vector_store, nombre_df: str, historial: list):
     """Construye el ejecutor del agente."""
     herramientas = crear_herramientas(df, vector_store, nombre_df, llm)
-    memoria = obtener_memoria(historial)
 
-    agente = create_react_agent(llm, herramientas, PROMPT_VIOLET)
+    instrucciones_sistema = str(PROMPT_VIOLET)
 
-    return AgentExecutor(
-        agent=agente,
-        tools=herramientas,
-        memory=memoria,
-        verbose=True,
-        max_iterations=5,
-        max_execution_time=60,
-        handle_parsing_errors=True,
-        early_stopping_method="force",
+    agente = create_react_agent(
+        model=llm, tools=herramientas, state_modifier=instrucciones_sistema
     )
+
+    return agente
 
 
 async def procesar(
@@ -84,8 +78,11 @@ async def procesar(
 
     # --- Lógica de Agentes (Churn / Finanzas) ---
     if categoria not in ["CHURN", "FINANZAS"]:
-        return "Lo siento, la consulta se encuentra fuera de mi alcance operativo actual.", "FUERA_SCOPE"
-    
+        return (
+            "Lo siento, la consulta se encuentra fuera de mi alcance operativo actual.",
+            "FUERA_SCOPE",
+        )
+
     clave = "churn" if categoria == "CHURN" else "superstore"
     nombre = (
         "Churn — TelcoVenezuela"
@@ -94,13 +91,34 @@ async def procesar(
     )
 
     if clave not in dfs:
-        return f"Error: El dataset operativo '{clave}' no se encuentra cargado en el servidor.", categoria
+        return (
+            f"Error: El dataset operativo '{clave}' no se encuentra cargado en el servidor.",
+            categoria,
+        )
 
     try:
         agente = construir_agente(dfs[clave], vector_store, nombre, historial)
-        resultado = agente.invoke({"input": pregunta, "nombre_df": nombre})
-        
-        return resultado.get("output", "Sin respuesta."), categoria
-    
+
+        # Mapeo del historial al estándar de mensajes LangGraph
+        mensajes_input = []
+        for msg in historial:
+            if msg.get("role") == "user":
+                mensajes_input.append(HumanMessage(content=msg["content"]))
+            elif msg.get("role") == "assistant":
+                mensajes_input.append(AIMessage(content=msg["content"]))
+
+        # Agregamos la consulta actual al final de la lista
+        mensajes_input.append(HumanMessage(content=pregunta))
+
+        # Invocamos al grafo pasándole el estado inicial de mensajes.
+        resultado = agente.invoke(
+            {"messages": mensajes_input}, config={"recursion_limit": 15}
+        )  # 'recursion_limit' actúa como salvaguarda frente a bucles infinitos (antiguo max_iterations)
+
+        # LangGraph devuelve la lista completa de mensajes modificados por el flujo.
+        respuesta_final = resultado["messages"][-1].content
+
+        return respuesta_final, categoria
+
     except Exception as e:
         return f"Error técnico: {str(e)}", categoria
