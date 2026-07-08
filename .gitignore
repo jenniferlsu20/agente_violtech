@@ -220,3 +220,8 @@ __marimo__/
 
 # FAISS
 faiss_index/
+
+__pycache__/
+*.pyc
+.streamlit/
+historial.json
