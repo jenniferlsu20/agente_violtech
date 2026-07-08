@@ -1,4 +1,5 @@
 import os
+import pandas as pd
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -53,3 +54,31 @@ CSS_VIOLTECH = """
     }
 </style>
 """
+
+
+def cargar_dataframes():
+    """
+    Carga los DataFrames desde el almacenamiento local.
+    NOTA: Se eliminó el decorador de Streamlit (@st.cache_data) ya que este módulo
+    es ejecutado por el backend de FastAPI en Render, donde Streamlit no está instalado.
+    La eficiencia en memoria la garantiza el ciclo de vida 'lifespan' de FastAPI en main.py.
+    """
+    dfs = {}
+
+    if RUTA_CHURN.exists():
+        dfs["churn"] = pd.read_csv(RUTA_CHURN)
+        print("📊 [Config] Dataset de Churn cargado correctamente.")
+    else:
+        print(
+            "⚠️ [Config] Alerta: No se encontró el archivo de Churn en la ruta especificada."
+        )
+
+    if RUTA_STORE.exists():
+        dfs["superstore"] = pd.read_csv(RUTA_STORE)
+        print("📊 [Config] Dataset de Superstore cargado correctamente.")
+    else:
+        print(
+            "⚠️ [Config] Alerta: No se encontró el archivo de Superstore en la ruta especificada."
+        )
+
+    return dfs

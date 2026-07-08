@@ -102,6 +102,10 @@ llm_router = ChatCohere(
     max_tokens=20,
 )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# VECTOR STORE y EMBEDDINGS
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 class VioletEmbeddings(Embeddings):
     """
@@ -143,11 +147,6 @@ SALUDO_VIOLET = (
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# VECTOR STORE
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 @st.cache_resource(show_spinner="Violet está leyendo los documentos de política...")
 def cargar_vector_store():
     ruta_fragmentos = Path(str(RUTA_FAISS)) / "fragmentos.pkl"
@@ -173,7 +172,7 @@ def cargar_vector_store():
         )
         docs = loader.load()
 
-        splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=80)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=80)
         fragmentos = splitter.split_documents(docs)
         fragmentos = [f for f in fragmentos if f.page_content.strip()]
 
@@ -1583,12 +1582,6 @@ def obtener_memoria(historial: list) -> ConversationBufferWindowMemory:
                 memoria.chat_memory.add_ai_message(msg["contenido"])
 
     return memoria
-    # for msg in historial[-(VENTANA_MEMORIA * 2) :]:
-    #     if msg["rol"] == "user":
-    #         memoria.chat_memory.add_user_message(msg["contenido"])
-    #     elif msg["rol"] == "assistant":
-    #         memoria.chat_memory.add_ai_message(msg["contenido"])
-    # return memoria
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1728,6 +1721,18 @@ def procesar(pregunta: str, dfs: dict, vector_store, historial: list):
         "analisis",
         "ventas",
         "retencion",
+        "política",
+        "politica",
+        "manual",
+        "violet",
+        "glosario",
+        "transacción",
+        "transacciones",
+        "ingreso",
+        "ganancia",
+        "perdida",
+        "pérdida",
+        "regla 20%",
     ]
     pregunta_lower = pregunta.lower()
 
@@ -1743,13 +1748,33 @@ def procesar(pregunta: str, dfs: dict, vector_store, historial: list):
         )
 
     # 3. Guardamos el contexto del reporte activo en memoria
-    if categoria in ["CHURN, FINANZAS"]:
+    if categoria in ["CHURN", "FINANZAS"]:
         st.session_state.ultima_categoria = categoria
         st.session_state.reporte_activo = (
             "financiero" if categoria == "FINANZAS" else "churn"
         )
 
     if categoria == "FUERA_SCOPE":
+        if any(
+            m in pregunta_lower for m in ["política", "manual", "reglas", "seguridad"]
+        ):
+            docs = vector_store.invoke(pregunta)
+            contexto = "\n\n".join(d.page_content for d in docs)
+            plantilla = PromptTemplate.from_template(
+                "Eres Violet, analista de ViolTech. Responde en español "
+                "con tono cálido y profesional.\n"
+                "Basa tu respuesta ÚNICAMENTE en el contexto proporcionado.\n"
+                "Si la información no está disponible, di:\n"
+                "'No encontré esa información en los documentos de ViolTech.'\n\n"
+                "Contexto:\n{contexto}\n\nPregunta: {pregunta}\n\nRespuesta:"
+            )
+            return (
+                (plantilla | llm | StrOutputParser()).invoke(
+                    {"contexto": contexto, "pregunta": pregunta}
+                ),
+                categoria,
+            )
+
         return (
             "Ese tema está fuera de mi área de conocimiento \n\n"
             "Puedo ayudarte con análisis de **CHURN:** Gestión de Retención,"

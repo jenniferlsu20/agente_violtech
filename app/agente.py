@@ -49,22 +49,43 @@ def construir_agente(df, vector_store, nombre_df: str, historial: list):
     )
 
 
-def procesar(pregunta: str, categoria: str, dfs: dict, vector_store, historial: list):
+async def procesar(
+    pregunta: str, categoria: str, dfs: dict, vector_store, historial: list
+):
     """Orquestador de lógica: Ejecuta el agente si la categoría es CHURN/FINANZAS/POLITICAS."""
 
     # --- Lógica de Políticas (RAG) ---
     if categoria == "POLITICAS":
-        docs = vector_store.invoke(pregunta)
-        contexto = "\n\n".join(d.page_content for d in docs)
-        plantilla = PromptTemplate.from_template(
-            "Eres Violet, analista de ViolTech. Contexto:\n{contexto}\n\nPregunta: {pregunta}\nRespuesta:"
-        )
-        respuesta = (plantilla | llm | StrOutputParser()).invoke(
-            {"contexto": contexto, "pregunta": pregunta}
-        )
-        return respuesta, categoria
+        try:
+            # Si vector_store es un objeto FAISS/Chroma nativo, usamos as_retriever() para invocarlo correctamente
+            retriever = (
+                vector_store.as_retriever()
+                if hasattr(vector_store, "as_retriever")
+                else vector_store
+            )
+            docs = retriever.invoke(pregunta)
+
+            contexto = "\n\n".join(d.page_content for d in docs)
+            plantilla = PromptTemplate.from_template(
+                "Eres Violet, analista de ViolTech. Contexto:\n{contexto}\n\nPregunta: {pregunta}\nRespuesta:"
+            )
+
+            # Ejecución de la cadena LCEL (LangChain Expression Language)
+            respuesta = (plantilla | llm | StrOutputParser()).invoke(
+                {"contexto": contexto, "pregunta": pregunta}
+            )
+
+            # 🔥 Retornamos de inmediato la respuesta y la categoría.
+            # Esto evita llamadas recursivas erróneas y detiene la ejecución aquí.
+            return respuesta, categoria
+
+        except Exception as e:
+            return f"Error técnico en el módulo de Políticas (RAG): {str(e)}", categoria
 
     # --- Lógica de Agentes (Churn / Finanzas) ---
+    if categoria not in ["CHURN", "FINANZAS"]:
+        return "Lo siento, la consulta se encuentra fuera de mi alcance operativo actual.", "FUERA_SCOPE"
+    
     clave = "churn" if categoria == "CHURN" else "superstore"
     nombre = (
         "Churn — TelcoVenezuela"
@@ -73,11 +94,13 @@ def procesar(pregunta: str, categoria: str, dfs: dict, vector_store, historial: 
     )
 
     if clave not in dfs:
-        return f"Error: Dataset {clave} no cargado.", categoria
+        return f"Error: El dataset operativo '{clave}' no se encuentra cargado en el servidor.", categoria
 
     try:
         agente = construir_agente(dfs[clave], vector_store, nombre, historial)
         resultado = agente.invoke({"input": pregunta, "nombre_df": nombre})
+        
         return resultado.get("output", "Sin respuesta."), categoria
+    
     except Exception as e:
         return f"Error técnico: {str(e)}", categoria
