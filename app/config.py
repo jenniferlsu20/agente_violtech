@@ -15,7 +15,7 @@ RUTA_HISTORIAL = RUTA_DATOS / "historial_violet.json"
 
 # Archivos de Datos
 RUTA_CHURN = RUTA_DATOS / "clientes_scored.csv"
-RUTA_STORE = RUTA_DATOS / "Superstore_cleaned.csv"
+RUTA_STORE = RUTA_DATOS / "Sample-Superstore_cleaned.csv"
 
 # Configuración del Sistema
 VENTANA_MEMORIA = 5

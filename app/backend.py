@@ -130,7 +130,7 @@ def _procesar_analisis(pregunta, dfs, vector_store, categoria, historial):
 
     try:
         agente = construir_agente(dfs[clave], vector_store, clave, historial)
-        res = agente.invoke({"input": pregunta})
+        res = agente.invoke({"input": pregunta}, "chat_history": historial)
         return res.get("output", "No obtuve respuesta."), categoria
     except Exception as e:
         return f"Error técnico: {str(e)}", categoria

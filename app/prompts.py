@@ -17,8 +17,8 @@ Historial: {chat_history}
 Herramientas disponibles: {tools}
 
 Prioridad de herramientas:
-- CHURN: "Consulta Rapida Churn"
-- FINANZAS: "Consulta Rapida Finanzas"
+- CHURN: "Consulta Churn"
+- FINANZAS: "Consulta Finanzas"
 - REPORTES: "Reporte Clientes en Riesgo" o "Reporte Financiero Ejecutivo"
 - CÁLCULOS: "Calculos Python"
 - ENVÍO: "Enviar reporte"

@@ -158,25 +158,62 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
         except Exception as e:
             return f"❌ Error generando gráfico: {str(e)}"
 
-    @tool("Consulta Rapida Churn", return_direct=True)
+    @tool("Consulta Churn", return_direct=True)
     def consulta_rapida_churn(pregunta: str) -> str:
-        """Consultas rápidas sobre churn."""
+        """
+        Útil para responder consultas sobre abandono de clientes (Churn) y niveles de riesgo.
+
+        IMPORTANTE: El dataset tiene estas columnas:
+        customerID, tenure, MonthlyCharges, TotalCharges, Churn, churn_prob,
+        risk_level, tenure_grupo, es_segmento_critico, servicios_valor_agregado.
+
+        Reglas de oro:
+        1. Para medir el abandono, usa la columna 'Churn' (Yes/No).
+        2. Para el nivel de riesgo, usa la columna 'risk_level' (Alto, Medio, Bajo).
+        3. Si preguntan por antigüedad, usa 'tenure' o 'tenure_grupo'.
+        """
         try:
             p = pregunta.lower()
-            lineas = []
-            if any(k in p for k in ["riesgo", "risk"]):
+
+            # 1. ANÁLISIS DE RIESGO (Enriquecido)
+            if any(k in p for k in ["riesgo", "risk", "nivel"]):
                 dist = df.get("risk_level", pd.Series()).value_counts()
+                lineas = []
+                total = len(df)
                 for nivel in ["Alto", "Medio", "Bajo"]:
                     n = int(dist.get(nivel, 0))
-                    pct = round(n / len(df) * 100, 1) if len(df) > 0 else 0
+                    pct = round(n / total * 100, 1) if total > 0 else 0
                     lineas.append(f"• Riesgo **{nivel}**: {n:,} clientes ({pct}%)")
-            return (
-                "¡Claro! Aquí tienes los datos:\n" + "\n".join(lineas)
-                if lineas
-                else f"Total clientes: **{len(df):,}**"
-            )
+                return "### Distribución de Riesgo:\n" + "\n".join(lineas)
+
+            # 2. ANÁLISIS DE CHURN (Abandono)
+            if any(
+                k in p
+                for k in ["churn", "abandono", "se van", "retención", "retencion"]
+            ):
+                # Convertimos a string, minúsculas y eliminamos espacios laterales
+                df_temp = df["Churn"].astype(str).str.lower().str.strip()
+
+                # Ahora contamos cuántos coinciden con "yes" y "no" (o "1" y "0")
+                # Adaptado para aceptar ambas posibilidades
+                si = len(df_temp[df_temp.isin(["yes", "1", "true"])])
+                no = len(df_temp[df_temp.isin(["no", "0", "false"])])
+
+                total = len(df)
+                tasa = round((si / total) * 100, 1) if total > 0 else 0
+
+                return (
+                    f"### Resumen de Abandono (Churn):\n"
+                    f"- Clientes que abandonaron: {si:,}\n"
+                    f"- Clientes activos: {no:,}\n"
+                    f"- Tasa de abandono global: **{tasa}%**"
+                )
+
+            # 3. FALLBACK: RESUMEN GENERAL
+            return f"Total de clientes analizados en Churn: **{len(df):,}**."
+
         except Exception as ex:
-            return f"Error: {str(ex)}"
+            return f"Error técnico al consultar el dataset de Churn: {str(ex)}"
 
     @tool("Reporte Clientes en Riesgo", return_direct=True)
     def reporte_clientes_riesgo(parametros: str) -> str:
@@ -223,22 +260,79 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
         except Exception as ex:
             return f"Error: {str(ex)}"
 
-    @tool("Consulta Rapida Finanzas", return_direct=True)
+    @tool("Consulta Finanzas", return_direct=True)
     def consulta_rapida_finanzas(pregunta: str) -> str:
-        """Consultas rápidas financieras."""
+        """
+        Útil para responder preguntas sobre métricas financieras del Superstore.
+        IMPORTANTE: El dataset tiene EXACTAMENTE estas columnas: Row ID, Order ID, Order Date,
+        Ship Date, Ship Mode, Customer ID, Customer Name, Segment, Country, City, State,
+        Postal Code, Region, Product ID, Category, Sub-Category, Product Name, Sales,
+        Quantity, Discount, Profit, margen_pct, es_perdida, rango_descuento, dias_envio,
+        anio_orden, mes_orden, periodo.
+
+        Reglas de oro:
+        1. Si el usuario busca productos específicos (ej. 'Tablets', 'Phones'), filtra por 'Sub-Category'.
+        2. 'Profit' negativo indica pérdida; positivo indica ganancia.
+        3. 'Sales' indica los ingresos totales.
+        """
+
+        # Convertimos a minúsculas para hacer un cruce (matching) seguro
+        pregunta_lower = pregunta.lower()
+
         try:
-            if any(k in pregunta.lower() for k in ["categoría", "category"]):
+            # 1. BÚSQUEDA DINÁMICA POR SUB-CATEGORÍA (Ej: "tablets", "phones", "art")
+            # Obtenemos los valores únicos de la columna y verificamos si están en la pregunta
+            subcategorias_unicas = [
+                str(sub).lower() for sub in df["Sub-Category"].dropna().unique()
+            ]
+            sub_encontradas = [
+                sub for sub in subcategorias_unicas if sub in pregunta_lower
+            ]
+
+            if sub_encontradas:
+                resultados = []
+                for sub in sub_encontradas:
+                    # Filtramos el DataFrame ignorando el case sensitive
+                    filtro = df[df["Sub-Category"].str.lower() == sub]
+                    ventas = filtro["Sales"].sum()
+                    ganancia = filtro["Profit"].sum()
+
+                    estado_financiero = "Pérdida" if ganancia < 0 else "Ganancia"
+
+                    resultados.append(
+                        f"- {sub.capitalize()}: Ventas ${ventas:,.2f} | {estado_financiero} ${ganancia:,.2f}"
+                    )
+                return "**Análisis por Sub-Categoría:**\n" + "\n".join(resultados)
+
+            # 2. BÚSQUEDA A NIVEL CATEGORÍA PRINCIPAL
+            if any(
+                k in pregunta_lower
+                for k in ["categoría", "category", "categorías", "categories"]
+            ):
                 stats = df.groupby("Category")[["Sales", "Profit"]].sum()
-                return "**Por categoría:**\n" + stats.to_string()
-            return f"**Resumen:** Ventas ${df['Sales'].sum():,.0f} | Ganancia ${df['Profit'].sum():,.0f}"
+
+                # Formateo elegante de la tabla
+                stats["Sales"] = stats["Sales"].apply(lambda x: f"${x:,.2f}")
+                stats["Profit"] = stats["Profit"].apply(lambda x: f"${x:,.2f}")
+
+                return "**Resumen por Categoría:**\n" + stats.to_string()
+
+            # 3. FALLBACK: RESUMEN GENERAL (Si no se especifica producto/categoría)
+            ventas_totales = df["Sales"].sum()
+            ganancia_total = df["Profit"].sum()
+            return (
+                f"**Resumen General del Superstore:**\n"
+                f"Ventas Totales: ${ventas_totales:,.2f} | Ganancia Total: ${ganancia_total:,.2f}"
+            )
+
         except Exception as ex:
-            return f"Error: {str(ex)}"
+            return f"Error técnico al consultar el dataset financiero: {str(ex)}"
 
     repl = PythonAstREPLTool(locals={"df": df, "pd": pd})
 
     @tool("Calculos Python")
     def calculos_python(input_codigo: str) -> str:
-        """Ejecuta código Python arbitrario."""
+        """Ejecuta codigo Python arbitrario."""
         limpio = re.sub(r"```python|```", "", input_codigo).strip()
         try:
             return repl.run(limpio)

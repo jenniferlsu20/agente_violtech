@@ -1,5 +1,6 @@
-from langgraph.prebuilt.chat_agent_executor import create_react_agent
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_classic.agents.react.agent import create_react_agent
+from langchain_classic.agents.agent import AgentExecutor
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_cohere import ChatCohere
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -15,32 +16,42 @@ llm = ChatCohere(
 )
 
 
-def obtener_memoria(historial: list) -> ConversationBufferWindowMemory:
-    memoria = ConversationBufferWindowMemory(
-        k=VENTANA_MEMORIA,
-        memory_key="chat_history",
-        return_messages=True,
+def obtener_memoria(historial: list) -> list:
+    mensajes_convertidos = []
+
+    # Conservamos exactamente tu lógica de ventana protectora (k * 2 mensajes)
+    # Ej: Si VENTANA_MEMORIA = 5, tomará los últimos 10 mensajes (5 preguntas y 5 respuestas)
+    mensajes_filtrados = (
+        historial[-(VENTANA_MEMORIA * 2) :] if VENTANA_MEMORIA > 0 else historial
     )
-    mensajes = historial[-(VENTANA_MEMORIA * 2) :]
-    for msg in mensajes:
-        if msg["rol"] == "user":
-            memoria.chat_memory.add_user_message(msg["contenido"])
-        elif msg["rol"] == "assistant":
-            memoria.chat_memory.add_ai_message(msg["contenido"])
-    return memoria
+
+    for msg in mensajes_filtrados:
+        # Soportamos tanto tus llaves nativas 'rol'/'contenido' como las de respaldo
+        rol = msg.get("rol") or msg.get("role")
+        contenido = msg.get("contenido") or msg.get("content")
+
+        if rol == "user":
+            mensajes_convertidos.append(HumanMessage(content=contenido))
+        elif rol in ["assistant", "ai"]:
+            mensajes_convertidos.append(AIMessage(content=contenido))
+
+    return mensajes_convertidos
 
 
 def construir_agente(df, vector_store, nombre_df: str, historial: list):
     """Construye el ejecutor del agente."""
     herramientas = crear_herramientas(df, vector_store, nombre_df, llm)
 
-    instrucciones_sistema = str(PROMPT_VIOLET)
+    # Construimos el agente nativo de LangChain
+    agente = create_react_agent(llm, herramientas, PROMPT_VIOLET)
 
-    agente = create_react_agent(
-        model=llm, tools=herramientas, state_modifier=instrucciones_sistema
+    # Retornamos el ejecutor real que procesará la consulta (Thought/Action/Observation)
+    return AgentExecutor(
+        agent=agente,
+        tools=herramientas,
+        verbose=True,
+        handle_parsing_errors=True,  # Evita que la API caiga si la IA comete un error de formato
     )
-
-    return agente
 
 
 async def procesar(
@@ -48,10 +59,12 @@ async def procesar(
 ):
     """Orquestador de lógica: Ejecuta el agente si la categoría es CHURN/FINANZAS/POLITICAS."""
 
-    # --- Lógica de Políticas (RAG) ---
+    # ==========================================
+    # 1. LÓGICA DE POLÍTICAS (RAG DIRECTO)
+    # ==========================================
     if categoria == "POLITICAS":
         try:
-            # Si vector_store es un objeto FAISS/Chroma nativo, usamos as_retriever() para invocarlo correctamente
+            # Usamos el retriever para buscar en los documentos de ViolTech
             retriever = (
                 vector_store.as_retriever()
                 if hasattr(vector_store, "as_retriever")
@@ -64,25 +77,26 @@ async def procesar(
                 "Eres Violet, analista de ViolTech. Contexto:\n{contexto}\n\nPregunta: {pregunta}\nRespuesta:"
             )
 
-            # Ejecución de la cadena LCEL (LangChain Expression Language)
+            # Ejecución de la cadena LCEL para responder en base al documento
             respuesta = (plantilla | llm | StrOutputParser()).invoke(
                 {"contexto": contexto, "pregunta": pregunta}
             )
 
-            # 🔥 Retornamos de inmediato la respuesta y la categoría.
-            # Esto evita llamadas recursivas erróneas y detiene la ejecución aquí.
             return respuesta, categoria
 
         except Exception as e:
             return f"Error técnico en el módulo de Políticas (RAG): {str(e)}", categoria
 
-    # --- Lógica de Agentes (Churn / Finanzas) ---
+    # ==========================================
+    # 2. VALIDACIÓN DE ALCANCE
+    # ==========================================
     if categoria not in ["CHURN", "FINANZAS"]:
         return (
             "Lo siento, la consulta se encuentra fuera de mi alcance operativo actual.",
             "FUERA_SCOPE",
         )
 
+    # Definimos qué dataset y prompt usar antes de entrar al try
     clave = "churn" if categoria == "CHURN" else "superstore"
     nombre = (
         "Churn — TelcoVenezuela"
@@ -95,30 +109,38 @@ async def procesar(
             f"Error: El dataset operativo '{clave}' no se encuentra cargado en el servidor.",
             categoria,
         )
+        
+    historial_filtrado = [
+        msg for msg in historial 
+        if "Reporte" not in msg.get("content", "")  # Excluimos reportes automáticos del historial de chat
+        ]
 
+    # ==========================================
+    # 3. LÓGICA DE AGENTES (CHURN / FINANZAS)
+    # ==========================================
     try:
-        agente = construir_agente(dfs[clave], vector_store, nombre, historial)
+        # Construimos el agente nativo de LangChain
+        agente = construir_agente(dfs[clave], vector_store, nombre, historial_filtrado)
 
-        # Mapeo del historial al estándar de mensajes LangGraph
-        mensajes_input = []
-        for msg in historial:
+        # Mapeo del historial al estándar de mensajes
+        mensajes_chat = []
+        for msg in historial_filtrado:
             if msg.get("role") == "user":
-                mensajes_input.append(HumanMessage(content=msg["content"]))
+                mensajes_chat.append(HumanMessage(content=msg["content"]))
             elif msg.get("role") == "assistant":
-                mensajes_input.append(AIMessage(content=msg["content"]))
+                mensajes_chat.append(AIMessage(content=msg["content"]))
 
-        # Agregamos la consulta actual al final de la lista
-        mensajes_input.append(HumanMessage(content=pregunta))
+        # Invocación nativa para LangChain AgentExecutor (Variables correctas)
+        resultado = agente.invoke({
+            "input": pregunta,
+            "chat_history": mensajes_chat,
+            "nombre_df": nombre
+        })
 
-        # Invocamos al grafo pasándole el estado inicial de mensajes.
-        resultado = agente.invoke(
-            {"messages": mensajes_input}, config={"recursion_limit": 15}
-        )  # 'recursion_limit' actúa como salvaguarda frente a bucles infinitos (antiguo max_iterations)
-
-        # LangGraph devuelve la lista completa de mensajes modificados por el flujo.
-        respuesta_final = resultado["messages"][-1].content
+        # Extraemos la salida final
+        respuesta_final = resultado["output"]
 
         return respuesta_final, categoria
 
     except Exception as e:
-        return f"Error técnico: {str(e)}", categoria
+        return f"Error técnico en el Agente: {str(e)}", categoria

@@ -474,7 +474,7 @@ def cargar_dataframes():
     dfs = {}
     if RUTA_CHURN.exists():
         dfs["churn"] = pd.read_csv(RUTA_CHURN)
-    if RUTA_STORE.exists():
+    if RUTA_STORE.exipythonsts():
         dfs["superstore"] = pd.read_csv(RUTA_STORE)
     return dfs
 

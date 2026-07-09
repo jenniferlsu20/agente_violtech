@@ -4,7 +4,8 @@ from pathlib import Path
 from langchain_core.embeddings import Embeddings
 from langchain_community.vectorstores import FAISS
 from langchain_community.retrievers import BM25Retriever
-from langchain.retrievers import EnsembleRetriever
+from langchain_core.retrievers import BaseRetriever
+from typing import List, Any
 from langchain_community.document_loaders import DirectoryLoader, PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.config import COHERE_API_KEY, RUTA_FAISS, RUTA_DOCS
@@ -75,6 +76,23 @@ def cargar_vector_store():
     bm25_retriever = BM25Retriever.from_documents(fragmentos)
     bm25_retriever.k = 3
 
-    return EnsembleRetriever(
-        retrievers=[faiss_retriever, bm25_retriever], weights=[0.5, 0.5]
-    )
+    class VioletHybridRetriever(BaseRetriever):
+        faiss_ret: BaseRetriever
+        bm25_ret: BaseRetriever
+
+        def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Any]:
+            # Ejecuta ambas búsquedas en paralelo/secuencial
+            docs_faiss = self.faiss_ret.invoke(query)
+            docs_bm25 = self.bm25_ret.invoke(query)
+            
+            # Intercala y elimina duplicados por contenido para no saturar al agente
+            vistos = set()
+            docs_combinados = []
+            for doc in (docs_faiss + docs_bm25):
+                if doc.page_content not in vistos:
+                    vistos.add(doc.page_content)
+                    docs_combinados.append(doc)
+            return docs_combinados
+
+    # Retornamos tu nuevo recuperador híbrido inmune a errores de importación
+    return VioletHybridRetriever(faiss_ret=faiss_retriever, bm25_ret=bm25_retriever)
