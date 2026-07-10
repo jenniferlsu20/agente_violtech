@@ -244,3 +244,53 @@ def clasificar(pregunta: str, categoria_anterior: str = "FINANZAS") -> str:
         print(f"[ROUTER LLM] Error: {ex}")
 
     return "FUERA_SCOPE"
+
+PALABRAS_TELEGRAM = ("telegram", "telegrama", "Telegram")
+PALABRAS_GMAIL = ("gmail", "correo", "email", "e-mail", "mail")
+PALABRAS_NEGATIVAS = (
+    "no",
+    "no gracias",
+    "ahora no",
+    "luego",
+    "despues",
+    "después",
+    "cancelar",
+    "no por ahora",
+    "dejalo",
+    "déjalo",
+    "no hace falta",
+)
+PALABRAS_AFIRMATIVAS = (
+    "si",
+    "sí",
+    "dale",
+    "ok",
+    "okay",
+    "claro",
+    "por favor",
+    "hazlo",
+    "envialo",
+    "envíalo",
+    "mandalo",
+    "mándalo",
+    "adelante",
+)
+
+def analizar_intencion_envio(texto: str):
+    t = texto.lower()
+    
+    # 1. ¿Es una negativa?
+    if any(p in t for p in PALABRAS_NEGATIVAS):
+        return {"accion": "CANCELAR", "canal": None}
+    
+    # 2. ¿Es una afirmativa?
+    if any(p in t for p in PALABRAS_AFIRMATIVAS):
+        canal = None
+        if any(p in t for p in PALABRAS_TELEGRAM):
+            canal = "telegram"
+        elif any(p in t for p in PALABRAS_GMAIL):
+            canal = "gmail"
+        
+        return {"accion": "CONFIRMAR", "canal": canal}
+        
+    return {"accion": "CONTINUAR_NORMAL", "canal": None}

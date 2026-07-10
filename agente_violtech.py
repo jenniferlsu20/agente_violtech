@@ -1117,7 +1117,7 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str):
         except Exception as ex:
             return f"Error en consulta rápida: {str(ex)}"
 
-    @tool("Reporte Clientes en Riesgo", return_direct=True)
+    @tool("Reporte Clientes en Riesgo", return_direct=False)
     def reporte_clientes_riesgo(parametros: str) -> str:
         """
         Genera un reporte ejecutivo de clientes en riesgo de churn
@@ -1208,11 +1208,11 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str):
 
                 # Determinar alerta de urgencia
                 if prob >= 75:
-                    urgencia = "🔴 URGENTE"
+                    urgencia = "🔴 ALTA"
                 elif prob >= 60:
-                    urgencia = "🟠 ALTA"
-                else:
                     urgencia = "🟡 MEDIA"
+                else:
+                    urgencia = "🟢 BAJA"
 
                 linea_cliente = (
                     f"**{i}. {cid}** {urgencia}  \n"

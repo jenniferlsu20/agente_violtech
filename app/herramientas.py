@@ -4,10 +4,13 @@ import base64
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import asyncio
+import json
 from langchain_core.tools import tool
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_experimental.tools import PythonAstREPLTool
+from app.envio import procesar_confirmacion_envio
 
 
 def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
@@ -215,50 +218,321 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
         except Exception as ex:
             return f"Error técnico al consultar el dataset de Churn: {str(ex)}"
 
-    @tool("Reporte Clientes en Riesgo", return_direct=True)
+    @tool("Reporte Clientes en Riesgo", return_direct=False)
     def reporte_clientes_riesgo(parametros: str) -> str:
-        """Reporte ejecutivo de clientes en riesgo."""
+        """
+        Genera un reporte ejecutivo de clientes en riesgo de churn
+        con sus datos clave para que el área comercial tome acción.
+        Usar cuando el usuario pida: 'reporte de clientes en riesgo',
+        'lista de clientes Alto riesgo', 'quiénes están en riesgo',
+        'clientes que debo contactar', 'reporte para comercialización'.
+        Parámetros opcionales: nivel de riesgo (Alto/Medio/Bajo), top N clientes.
+        """
         try:
-            nivel = next(
-                (
-                    n
-                    for n in ["Alto", "Medio", "Bajo"]
-                    if n.lower() in parametros.lower()
-                ),
-                "Alto",
-            )
+            # Detectar nivel de riesgo solicitado
+            nivel = "Alto"
+            for n in ["Alto", "Medio", "Bajo"]:
+                if n.lower() in parametros.lower():
+                    nivel = n
+                    break
+
+            # Detectar top N
+            top_n = 10
+            match = re.search(r"\b(\d+)\b", parametros)
+            if match:
+                top_n = min(int(match.group(1)), 50)
+
+            # Validar columnas necesarias
+            cols_requeridas = [
+                "customerID",
+                "risk_level",
+                "churn_prob",
+                "MonthlyCharges",
+                "tenure",
+            ]
+            cols_faltantes = [c for c in cols_requeridas if c not in df.columns]
+            if cols_faltantes:
+                return (
+                    f"El dataset no tiene las columnas requeridas: {cols_faltantes}\n"
+                    "Verifica que estás usando clientes_scored.csv"
+                )
+
+            # Filtrar y ordenar
             df_riesgo = (
                 df[df["risk_level"] == nivel]
                 .sort_values("churn_prob", ascending=False)
-                .head(10)
+                .head(top_n)
+                .copy()
             )
 
-            lineas = [f"## 📋 Reporte Clientes en Riesgo {nivel}", "---"]
-            for i, row in enumerate(df_riesgo.itertuples(), 1):
-                lineas.append(
-                    f"**{i}. {row.customerID}** | Prob: **{row.churn_prob*100:.1f}%**"
+            if df_riesgo.empty:
+                return f"No encontré clientes con riesgo **{nivel}** en el dataset."
+
+            # Columnas extra disponibles
+            tiene_contrato = "Contract" in df.columns
+            tiene_internet = "InternetService" in df.columns
+            tiene_segcritico = "es_segmento_critico" in df.columns
+            tiene_servicios = "servicios_valor_agregado" in df.columns
+
+            # KPIs del reporte
+            total_riesgo = len(df[df["risk_level"] == nivel])
+            ingreso_expuesto = df_riesgo["MonthlyCharges"].sum()
+            prob_prom = df_riesgo["churn_prob"].mean() * 100
+            tenure_prom = df_riesgo["tenure"].mean()
+
+            # Encabezado ejecutivo
+            lineas = [
+                f"## 📋 Reporte de Clientes en Riesgo {nivel}",
+                "*Generado por Violet · ViolTech — Tu Agente Aliado*",
+                "",
+                "---",
+                "### Resumen ejecutivo",
+                f"- Total clientes en riesgo **{nivel}**: **{total_riesgo:,}**",
+                f"- Mostrando top **{len(df_riesgo)}** por mayor probabilidad de churn",
+                f"- Ingreso mensual expuesto (top {len(df_riesgo)}): **${ingreso_expuesto:,.2f}**",
+                f"- Probabilidad promedio de churn: **{prob_prom:.1f}%**",
+                f"- Antigüedad promedio: **{tenure_prom:.0f} meses**",
+                "",
+                "---",
+                "### 🎯 Clientes prioritarios — acción inmediata requerida",
+                "",
+            ]
+
+            # Tabla de clientes
+            for i, (_, row) in enumerate(df_riesgo.iterrows(), 1):
+                prob = row["churn_prob"] * 100
+                cargo = row["MonthlyCharges"]
+                tenure = row["tenure"]
+                cid = row["customerID"]
+
+                # Determinar alerta de urgencia
+                if prob >= 75:
+                    urgencia = "🔴 ALTA"
+                elif prob >= 60:
+                    urgencia = "🟡 MEDIA"
+                else:
+                    urgencia = "🟢 BAJA"
+
+                linea_cliente = (
+                    f"**{i}. {cid}** {urgencia}  \n"
+                    f"   Prob. churn: **{prob:.1f}%** | "
+                    f"Cargo mensual: **${cargo:.2f}** | "
+                    f"Antigüedad: **{tenure} meses**"
                 )
 
-            lineas.append("\n¿Quieres un gráfico o enviarlo por PDF?")
-            return "\n".join(lineas)
+                # Info adicional si está disponible
+                extras = []
+                if tiene_contrato and "Contract" in row:
+                    extras.append(f"Contrato: {row['Contract']}")
+                if tiene_internet and "InternetService" in row:
+                    extras.append(f"Internet: {row['InternetService']}")
+                if tiene_segcritico and row.get("es_segmento_critico") == 1:
+                    extras.append("⚠️ Segmento crítico")
+                if tiene_servicios and "servicios_valor_agregado" in row:
+                    n_serv = int(row["servicios_valor_agregado"])
+                    if n_serv == 0:
+                        extras.append("Sin servicios valor agregado")
+
+                if extras:
+                    linea_cliente += f"  \n   {' | '.join(extras)}"
+
+                lineas.append(linea_cliente)
+                lineas.append("")
+
+            # Recomendación estratégica de Violet
+            lineas += [
+                "---",
+                "### 💡 Recomendación de Violet",
+                "",
+            ]
+
+            if nivel == "Alto":
+                lineas += [
+                    "Estos clientes requieren **contacto comercial inmediato** "
+                    "(máximo 48 horas según la política de retención de ViolTech).",
+                    "",
+                    "**Acciones sugeridas:**",
+                    "1. Ofrecer migración a contrato anual con descuento del 15-20%",
+                    "2. Activar prueba gratuita de TechSupport (reduce churn 26 puntos)",
+                    "3. Bundle OnlineSecurity + TechSupport con 25% de descuento",
+                    "4. Priorizar clientes marcados como ⚠️ Segmento crítico",
+                    "",
+                    f"💰 **Impacto potencial**: retener el 30% de estos clientes "
+                    f"preservaría ~**${ingreso_expuesto * 0.3:,.0f}/mes** en ingresos.",
+                ]
+            elif nivel == "Medio":
+                lineas += [
+                    "Estos clientes requieren **seguimiento preventivo** en los "
+                    "próximos 7 días hábiles.",
+                    "",
+                    "**Acciones sugeridas:**",
+                    "1. Contacto proactivo para evaluar satisfacción",
+                    "2. Oferta de servicios valor agregado (TechSupport, OnlineSecurity)",
+                    "3. Programa de beneficios por permanencia",
+                ]
+            else:
+                lineas += [
+                    "Estos clientes están estables. Incluirlos en campañas de "
+                    "fidelización regulares para mantener el bajo riesgo.",
+                ]
+
+            lineas += [
+                "",
+                "---",
+                "**Siguiente paso:**",
+                "¿Deseas acompañar este reporte con un **gráfico** (ej. distribución de riesgo) o pasamos directamente a **enviarlo por correo/Telegram**?",
+            ]
+
+            texto_final = "\n".join(lineas)
+
+            return texto_final
+
         except Exception as ex:
             return f"Error generando reporte: {str(ex)}"
 
-    @tool("Reporte Financiero Ejecutivo", return_direct=True)
+    @tool("Reporte Financiero Ejecutivo", return_direct=False)
     def reporte_financiero_ejecutivo(parametros: str) -> str:
-        """Reporte financiero de Superstore."""
+        """
+        Genera un reporte financiero detallado del dataset de Superstore.
+        Argumento 'parametros': Palabras clave de la consulta del usuario.
+        """
+        global ultimo_reporte_generado
+
         try:
+            # Limpiamos espacios en blanco de los nombres de columnas
+            df.columns = df.columns.str.strip()
+
+            # Validación crítica antes de operar
+            if "Sales" not in df.columns or "Profit" not in df.columns:
+                columnas_detectadas = df.columns.tolist()
+                return f"Error: Dataset incorrecto. Columnas encontradas: {columnas_detectadas}"
+            # ----------------------------
+
+            p = parametros.lower() if parametros else ""
+
+            # 1. KPIs Generales
             total_ventas = df["Sales"].sum()
             total_ganancia = df["Profit"].sum()
+            margen_global = (total_ganancia / total_ventas) * 100
+
+            # 2. Análisis de pérdidas
+            negativos = df[df["Profit"] < 0]
+            pct_perdida = (len(negativos) / len(df)) * 100
+            peor_cat = negativos.groupby("Category")["Profit"].sum().idxmin()
+
+            # 3. Rentabilidad por Segmento (Resumen)
+            seg = df.groupby("Segment")["Profit"].sum()
+            mejor_segmento = seg.idxmax()
+
+            # Estructura del Reporte
             lineas = [
-                "## 📊 Reporte Financiero Ejecutivo",
-                f"Ventas Totales: **${total_ventas:,.2f}**",
-                f"Ganancia Neta: **${total_ganancia:,.2f}**",
-                "\n¿Gráfico o PDF?",
+                "## 📊 Reporte Financiero Ejecutivo - Superstore",
+                "*Generado por Violet · ViolTech*",
+                "",
+                "### 📈 Resumen de Desempeño",
+                f"- Ventas Totales: **${total_ventas:,.2f}**",
+                f"- Ganancia Neta: **${total_ganancia:,.2f}**",
+                f"- Margen Global: **{margen_global:.1f}%**",
+                "",
+                "### 🚩 Puntos de Alerta",
+                f"- Transacciones en pérdida: **{len(negativos):,}** ({pct_perdida:.1f}% del total)",
+                f"- Categoría crítica: **{peor_cat}**",
+                "",
+                "### 💡 Sugerencias Estratégicas",
+                "1. **Revisión de Descuentos**: Ajustar umbrales para transacciones con margen negativo.",
+                f"2. **Optimización**: Evaluar procesos en la categoría **{peor_cat}**.",
+                f"3. **Segmentación**: El segmento **{mejor_segmento}** reporta la mayor ganancia total.",
+                "",
+                "---",
+                "**¿Deseas profundizar en este análisis visualmente?**",
+                "Puedo generar gráficos de:",
+                "• `Distribución de ganancias por categoría`",
+                "• `Tendencia de ventas por segmento`",
+                "• `Mapa de pérdidas por subcategoría`",
+                "\n*Solo indícame cuál prefieres o si deseas pasar directamente a **enviarlo por correo/Telegram.**",
             ]
-            return "\n".join(lineas)
+
+            # Lógica para detectar contexto previo y personalizar sugerencia
+            contexto_sugerencia = (
+                "• Distribución de ganancias por categoría"  # Por defecto
+            )
+
+            if "pérdida" in p or "negativo" in p:
+                contexto_sugerencia = "• Análisis de pérdidas por subcategoría"
+            elif "segmento" in p or "ventas" in p:
+                contexto_sugerencia = "• Ventas por segmento"
+
+            lineas.append(
+                f"\n*Sugerencia recomendada basada en tu consulta: {contexto_sugerencia}*"
+            )
+
+            texto_final = "\n".join(lineas)
+
+            ultimo_reporte_generado = texto_final
+
+            return texto_final
+
         except Exception as ex:
-            return f"Error: {str(ex)}"
+            return f"Error al generar el reporte financiero: {str(ex)}"
+
+    class EstadoBot:
+        ultimo_reporte_generado = ""
+        ultimo_tipo_reporte = None
+
+    @tool("Enviar Reporte a Canal", return_direct=False)
+    def tool_enviar_reporte(parametros_json: str) -> str:
+        """
+        Envía el último reporte generado por el sistema.
+
+        ¡IMPORTANTE! El Action Input DEBE ser estrictamente un string JSON válido.
+        Canales aceptados: 'telegram' o 'gmail'.
+
+        Ejemplos de Action Input:
+        - Para Telegram: {"canal": "telegram", "destino": "TELEGRAM_CHAT_ID"}
+        - Para Gmail: {"canal": "gmail", "destino": "correo@ejemplo.com"}
+
+        NO incluyas el texto del reporte en el JSON. El sistema ya lo tiene en memoria.
+        """
+        try:
+            # Limpiamos posibles comillas simples o bloques de código markdown que el LLM pueda añadir
+            texto_limpio = parametros_json.strip("`").replace("json\n", "").strip()
+            argumentos = json.loads(texto_limpio)
+        except json.JSONDecodeError:
+            return 'Error: El Action Input debe ser un JSON válido. Ejemplo: {"canal": "gmail", "destino": "usuario"}'
+
+        canal = argumentos.get("canal")
+        destino = argumentos.get("destino")
+
+        if not canal or not destino:
+            return "Error: Faltan las claves 'canal' o 'destino' en el JSON."
+
+        canal = canal.lower()
+        if canal not in ["telegram", "gmail"]:
+            return f"Error: Canal '{canal}' no soportado. Usa 'telegram' o 'gmail'."
+
+        # Verificamos que exista un reporte en la memoria
+        if not EstadoBot.ultimo_reporte_generado:
+            return "Error: No hay ningún reporte generado previamente para enviar."
+
+        # Creamos un contexto de sesión ficticio al vuelo para alimentar el módulo estructurado
+        tipo_activo = EstadoBot.ultimo_tipo_reporte or "churn"
+        contexto_simulado = {
+            "tipo_reporte_activo": tipo_activo,
+            f"ultimo_reporte_{tipo_activo}": EstadoBot.ultimo_reporte_generado,
+        }
+
+        # Ejecutamos el envío asíncrono dentro del entorno síncrono de la herramienta de LangChain
+        resultado, _ = asyncio.run(
+            procesar_confirmacion_envio(
+                canal=canal, destino=destino, contexto_sesion=contexto_simulado
+            )
+        )
+
+        # Limpiador de memoria
+        EstadoBot.ultimo_reporte_generado = ""
+        EstadoBot.ultimo_tipo_reporte = None
+
+        return resultado
 
     @tool("Consulta Finanzas", return_direct=True)
     def consulta_rapida_finanzas(pregunta: str) -> str:
@@ -341,11 +615,13 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
 
     return [
         buscar_politicas,
+        resumen_estadistico,
         informacion_dataset,
         generar_grafico,
         consulta_rapida_churn,
         reporte_clientes_riesgo,
         reporte_financiero_ejecutivo,
+        tool_enviar_reporte,
         consulta_rapida_finanzas,
         calculos_python,
     ]

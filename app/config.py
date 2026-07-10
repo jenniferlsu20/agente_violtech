@@ -27,6 +27,9 @@ COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 # Credenciales de ServicioTELEGRAM_CHAT_ID
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_APP_PASSWORD = os.getenv("SMTP_APP_PASSWORD")
+# Servidor y Puerto estándar de Gmail (usando SSL)
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", 465))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 

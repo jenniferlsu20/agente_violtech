@@ -15,13 +15,13 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, HRFlowable
 
 # Importamos las credenciales desde tu módulo centralizado de configuración
-from config import (
-    TELEGRAM_TOKEN,
+from app.config import (
+    TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
     SMTP_SERVER,
     SMTP_PORT,
     SMTP_USER,
-    SMTP_PASSWORD
+    SMTP_APP_PASSWORD
 )
 
 # --- 1. LIMPIEZA DE EMOJIS Y PARSEO DE MARKDOWN ---
@@ -104,7 +104,7 @@ def generar_pdf_reporte(
     story.append(Spacer(1, 10))
 
     # Procesar línea por línea el Markdown del Agente
-    lineas = texto_markdown.split('\n')
+    lineas = texto_reporte.split('\n')
     for linea in lineas:
         linea_limpia = _limpiar_emojis(linea).strip()
         if not linea_limpia:
@@ -149,29 +149,31 @@ def generar_pdf_reporte(
 
 async def enviar_por_telegram(buffer_pdf: bytes, filename: str = "reporte_violtech.pdf") -> str:
     """Envía el PDF de forma asíncrona mediante la API de Bots de Telegram."""
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return "Error: Credenciales de Telegram no configuradas en el servidor."
     
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     files = {'document': (filename, buffer_pdf, 'application/pdf')}
     data = {
         'chat_id': TELEGRAM_CHAT_ID,
         'caption': "📊 *¡Hola!* éste es el reporte interactivo en PDF que me solicitaste, lo puedes visualizar ingresando al grupo Violet_Reportes.",
+        "parse_mode": "Markdown",
     }
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, data=data, files=files, timeout=20.0)
-            if response.status_code == 200:
-                return "Exitoso"
-            return f"Error API Telegram (Status {response.status_code}): {response.text}"
-    except Exception as e:
-        return f"Error de conexión con Telegram: {str(e)}"
+            resultado = response.json()
             
+            if not resultado.get("ok"):
+                return f"Error Telegram: {resultado.get('description')}"
+        return "enviado por Telegram"
+    except Exception as e:
+        return f"Error de conexión con Telegram: {str(e)}"            
             
 def _enviar_smtp_sincrono(buffer_pdf: bytes, destino: str, filename: str) -> str:
     """Lógica bloqueante de SMTP empaquetada para ser ejecutada en un hilo seguro."""
-    if not SMTP_USER or not SMTP_PASSWORD:
+    if not SMTP_USER or not SMTP_APP_PASSWORD:
         return "Error: Credenciales SMTP no configuradas en el servidor."
 
     msg = MIMEMultipart()
@@ -197,9 +199,9 @@ def _enviar_smtp_sincrono(buffer_pdf: bytes, destino: str, filename: str) -> str
     try:
         # Uso estricto de SSL/TLS para seguridad corporativa
         with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=15) as server:
-            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.login(SMTP_USER, SMTP_APP_PASSWORD)
             server.sendmail(SMTP_USER, destino, msg.as_string())
-        return "Exitoso"
+        return "Envio exitoso por Gmail"
     except Exception as e:
         return f"Excepción SMTP: {str(e)}"
 
@@ -304,10 +306,9 @@ async def procesar_confirmacion_envio(canal: str, destino: str = None, contexto_
         return f"❌ Error crítico durante la ejecución del envío: {str(e)}", nuevos_estados
     
     
-def manejar_datos_contacto(pregunta: str):
+async def manejar_datos_contacto(pregunta: str, contexto_session: dict) -> tuple:
     """
-    Gestiona el envío del reporte, aplica los guardrails
-    y limpia el estado para finalizar la sesión.
+    Gestiona el flujo completo cuando el usuario proporciona sus datos de contacto.
     """
     # 1. Validar y extraer el correo del texto ingresado
     match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", pregunta)
@@ -316,8 +317,13 @@ def manejar_datos_contacto(pregunta: str):
 
     correo_destino = match.group(0)
 
-    # 2. Llamar al orquestador maestro que creamos previamente
-    # Él se encargará de buscar el reporte en memoria, crear el PDF y enviarlo
-    resultado = es_destino_seguro(canal="gmail", destino=correo_destino)
+    if not es_destino_seguro(correo_destino, "gmail"):
+        return "❌ Error: La dirección de correo no cumple con las políticas de seguridad.", contexto_session
+    
+    resultado, nuevo_contexto = await procesar_confirmacion_envio(
+        canal="gmail",
+        destino=correo_destino,
+        contexto_sesion=contexto_session
+    )
 
-    return resultado
+    return resultado, nuevo_contexto
