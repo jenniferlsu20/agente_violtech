@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
+from langchain_core.globals import set_debug
 
 # Importaciones de tu lógica modular en la carpeta app/
 from app.agente import procesar
@@ -11,6 +12,7 @@ from app.embeddings import cargar_vector_store
 from app.config import cargar_dataframes
 from app.router import clasificar
 
+set_debug(os.getenv("VIOLET_DEBUG", "false").lower() == "true")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -57,8 +59,6 @@ app.add_middleware(
 
 
 # --- MODELOS DE VALIDACIÓN (PYDANTIC) ---
-
-
 class ChatRequest(BaseModel):
     pregunta: str
     historial: List[Dict[str, Any]]

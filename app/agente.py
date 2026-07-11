@@ -69,11 +69,46 @@ def construir_agente(df, vector_store, nombre_df: str, historial: list):
     agente = create_react_agent(llm, tools, prompt)
 
     return AgentExecutor(
-        agent=agente,
-        tools=tools,
-        verbose=True,
-        handle_parsing_errors=True,
+        agent=agente, tools=tools, verbose=True, handle_parsing_errors=True
     )
+    
+
+_FRASES_RECHAZO_ENVIO = (
+    "no puedo enviar", "no estoy autorizada", "no pude enviar",
+    "asegúrate de que se haya generado", "hubo un inconveniente",
+    "no puedo procesar el envío",
+)
+
+def formatear_historial(historial: list, ventana: int = VENTANA_MEMORIA) -> str:
+    """
+    Convierte el historial en un string compacto para el prompt.
+    Excluye rechazos de envío previos — si se dejan, el modelo los
+    imita en turnos futuros en vez de reintentar la herramienta
+    (efecto de anclaje sobre su propia respuesta anterior).
+    """
+    if not historial:
+        return "Sin historial previo."
+
+    turnos = []
+    for msg in historial[-(ventana * 2):]:
+        rol = msg.get("rol") or msg.get("role", "")
+        contenido = msg.get("contenido") or msg.get("content", "")
+
+        # No arrastrar intentos fallidos de envío al contexto futuro
+        if rol in ("assistant", "Violet") and any(
+            frase in contenido.lower() for frase in _FRASES_RECHAZO_ENVIO
+        ):
+            continue
+
+        if rol in ("assistant", "Violet") and len(contenido) > 120:
+            contenido = contenido[:117] + "…"
+
+        if rol == "user":
+            turnos.append(f"Usuario: {contenido}")
+        elif rol in ("assistant", "Violet"):
+            turnos.append(f"Violet: {contenido}")
+
+    return "\n".join(turnos) if turnos else "Sin historial previo."
 
 
 async def procesar(
@@ -113,11 +148,18 @@ async def procesar(
     nombre = (
         "Agente de Envíos"
         if categoria == "ACCION_ENVIO"
-        else ("Churn — TelcoVenezuela" if categoria == "CHURN" else "SmartFinance — Superstore")
+        else (
+            "Churn — TelcoVenezuela"
+            if categoria == "CHURN"
+            else "SmartFinance — Superstore"
+        )
     )
 
     if clave not in dfs:
-        return f"Error: El dataset operativo '{clave}' no se encuentra cargado.", categoria
+        return (
+            f"Error: El dataset operativo '{clave}' no se encuentra cargado.",
+            categoria,
+        )
 
     # 4. PROCESAMIENTO DEL HISTORIAL
     historial_formateado = []
@@ -125,7 +167,7 @@ async def procesar(
         # Filtro de seguridad: mantenemos el reporte si estamos en modo envío
         if "Reporte" in m.get("content", "") and categoria != "ACCION_ENVIO":
             continue
-        
+
         if m["role"] == "user":
             historial_formateado.append(HumanMessage(content=m["content"]))
         else:
@@ -138,12 +180,12 @@ async def procesar(
         if intencion["accion"] == "CANCELAR":
             return "Entendido, no realizaré el envío del reporte.", categoria
         if intencion["accion"] == "CONFIRMAR" and intencion["canal"]:
-            pregunta_final = f"{pregunta} [INSTRUCCIÓN DEL SISTEMA: Usuario confirmó envío por {intencion['canal']}. Usa la herramienta 'enviar_reporte_directo'.]"
+            pregunta_final = f"{pregunta} [INSTRUCCIÓN DEL SISTEMA: Usuario confirmó envío por {intencion['canal']}. Usa la herramienta 'Enviar Reporte a Canal'.]"
 
     # 6. INVOCACIÓN DEL AGENTE (CHURN / FINANZAS / ACCION_ENVIO)
     try:
         agente = construir_agente(dfs[clave], vector_store, nombre, historial)
-        resultado = agente.invoke(
+        resultado = await agente.ainvoke(
             {"input": pregunta_final, "chat_history": historial_formateado}
         )
         # Retornamos el resultado y la categoría consistentemente

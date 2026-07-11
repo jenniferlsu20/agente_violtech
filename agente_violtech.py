@@ -1184,7 +1184,7 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str):
             # Encabezado ejecutivo
             lineas = [
                 f"## 📋 Reporte de Clientes en Riesgo {nivel}",
-                f"*Generado por Violet · ViolTech — Tu Agente Aliado*",
+                "*Generado por Violet · ViolTech — Tu Agente Aliado*",
                 "",
                 "---",
                 "### Resumen ejecutivo",
@@ -1888,14 +1888,14 @@ def main():
 
         if st.session_state.show_about:
             st.info("""
-            ### Violet v1.0.0
-            **Analista de Inteligencia de Negocios**
+            ### Violet v1.0.0\n
+            **Analista de Inteligencia de Negocios**\n\n
             
-            Especialista en:
-            - 📊 Churn Predictivo
-            - 📈 Análisis Financiero
-            - 📑 Políticas e Información Violtech
-            - 🛡️ Gestión de Datos Segura
+            Especialista en:\n
+            - 📊 Churn Predictivo\n
+            - 📈 Análisis Financiero\n
+            - 📑 Políticas e Información Violtech\n
+            - 🛡️ Gestión de Datos Segura\n\n
             
             Desarrollado por: Jennifer | 
             Alura ONE Challenge

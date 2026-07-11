@@ -11,6 +11,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_experimental.tools import PythonAstREPLTool
 from app.envio import procesar_confirmacion_envio
+from app.config import TELEGRAM_CHAT_ID
 
 
 def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
@@ -476,8 +477,10 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
             return f"Error al generar el reporte financiero: {str(ex)}"
 
     class EstadoBot:
-        ultimo_reporte_generado = ""
-        ultimo_tipo_reporte = None
+        ultimo_reporte_financiero = ""
+        ultimo_reporte_churn = ""
+
+    GRUPO_VIOLET = TELEGRAM_CHAT_ID
 
     @tool("Enviar Reporte a Canal", return_direct=False)
     def tool_enviar_reporte(parametros_json: str) -> str:
@@ -493,46 +496,69 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
 
         NO incluyas el texto del reporte en el JSON. El sistema ya lo tiene en memoria.
         """
+        # 1. Parsear el JSON — limpiar markdown que el LLM pueda añadir
         try:
-            # Limpiamos posibles comillas simples o bloques de código markdown que el LLM pueda añadir
             texto_limpio = parametros_json.strip("`").replace("json\n", "").strip()
-            argumentos = json.loads(texto_limpio)
-        except json.JSONDecodeError:
-            return 'Error: El Action Input debe ser un JSON válido. Ejemplo: {"canal": "gmail", "destino": "usuario"}'
+            # Extraer SOLO el objeto JSON válido: desde el primer '{' hasta
+            # su '}' de cierre correspondiente — ignora cualquier carácter
+            inicio = texto_limpio.find("{")
+            fin = texto_limpio.rfind("}")
+            if inicio == -1 or fin == -1 or fin < inicio:
+                raise json.JSONDecodeError("No se encontró un objeto JSON", texto_limpio, 0)
 
+            texto_json = texto_limpio[inicio:fin + 1]
+            argumentos = json.loads(texto_json)
+        except json.JSONDecodeError:
+            return (
+                'Error de formato en el JSON recibido. Vuelve a intentar con '
+                'EXACTAMENTE este formato, sin texto adicional antes ni después: '
+                '{"canal": "gmail", "destino": "usuario@gmail.com"}'
+            )
+            
         canal = argumentos.get("canal")
         destino = argumentos.get("destino")
 
         if not canal or not destino:
             return "Error: Faltan las claves 'canal' o 'destino' en el JSON."
 
-        canal = canal.lower()
-        if canal not in ["telegram", "gmail"]:
+        canal = canal.lower().strip()
+        if canal not in ("telegram", "gmail"):
             return f"Error: Canal '{canal}' no soportado. Usa 'telegram' o 'gmail'."
 
-        # Verificamos que exista un reporte en la memoria
-        if not EstadoBot.ultimo_reporte_generado:
-            return "Error: No hay ningún reporte generado previamente para enviar."
+        if canal == "telegram" and destino == "TELEGRAM_CHAT_ID":
+            destino = GRUPO_VIOLET
 
-        # Creamos un contexto de sesión ficticio al vuelo para alimentar el módulo estructurado
-        tipo_activo = EstadoBot.ultimo_tipo_reporte or "churn"
-        contexto_simulado = {
-            "tipo_reporte_activo": tipo_activo,
-            f"ultimo_reporte_{tipo_activo}": EstadoBot.ultimo_reporte_generado,
+        # 2. Fuente única de verdad para el reporte activo — EstadoBot
+        if EstadoBot.ultimo_reporte_churn:
+            tipo = "churn"
+        elif EstadoBot.ultimo_reporte_financiero:
+            tipo = "financiero"
+        else:
+            return "❌ No hay ningún reporte generado previamente para enviar."
+
+        contexto_sesion = {
+            "tipo_reporte_activo": tipo,
+            f"ultimo_reporte_{tipo}": (
+                EstadoBot.ultimo_reporte_churn
+                if tipo == "churn"
+                else EstadoBot.ultimo_reporte_financiero
+            ),
         }
 
-        # Ejecutamos el envío asíncrono dentro del entorno síncrono de la herramienta de LangChain
-        resultado, _ = asyncio.run(
+        # 3. procesar_confirmacion_envio ya genera el PDF
+        mensaje, _ = asyncio.run(
             procesar_confirmacion_envio(
-                canal=canal, destino=destino, contexto_sesion=contexto_simulado
+                canal=canal, destino=destino, contexto_sesion=contexto_sesion
             )
         )
 
-        # Limpiador de memoria
-        EstadoBot.ultimo_reporte_generado = ""
-        EstadoBot.ultimo_tipo_reporte = None
+        # 4. Limpiar el reporte enviado para no reenviarlo por error
+        if tipo == "churn":
+            EstadoBot.ultimo_reporte_churn = ""
+        else:
+            EstadoBot.ultimo_reporte_financiero = ""
 
-        return resultado
+        return mensaje
 
     @tool("Consulta Finanzas", return_direct=True)
     def consulta_rapida_finanzas(pregunta: str) -> str:
