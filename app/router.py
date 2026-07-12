@@ -15,9 +15,10 @@ PROMPT_ROUTER = PromptTemplate.from_template("""
 Clasifica esta pregunta en UNA categoría. Responde SOLO la categoría, sin explicación.
 
 Categorías:
-- POLITICAS: Úsala para cualquier pregunta que involucre CONCEPTOS, TEORÍAS, DEFINICIONES,
-SIGNIFICADOS o REGLAS (por ejemplo, "regla del 20%"). También aplica para estrategias de la 
-empresa, manuales, glosarios y preguntas sobre la arquitectura o funcionamiento de Violet.
+- POLITICAS: Úsala para cualquier pregunta acerca de REGLAS, CONCEPTOS, TEORÍAS, DEFINICIONES,
+SIGNIFICADOS (incluye los documentos de POLÍTICA DE GESTIÓN FINANCIERA, POLITICA RETENCION CLIENTE 
+Y MANUAL AGENTE VIOLET). También aplica para estrategias de la empresa, manuales, glosarios y 
+preguntas sobre la arquitectura o funcionamiento de Violet.
 - CHURN: Úsala SOLO para consultar DATOS NUMÉRICOS, MÉTRICAS o ESTADÍSTICAS sobre retención 
 de clientes, riesgo de abandono (churn, churn_prob, risk_level), telecomunicaciones, fibra, 
 soporte técnico, o variables de usuarios (tenure, MonthlyCharges, TelcoVenezuela).

@@ -16,7 +16,7 @@ from app.envio import (
     manejar_datos_contacto,
     procesar_confirmacion_envio,
 )
-from app.agente import construir_agente, llm
+from app.agente import construir_agente, truncar_historial, llm
 from app.router import clasificar
 
 
@@ -81,8 +81,24 @@ async def procesar(
 
         # Guardamos el último reporte generado en el estado para cuando el usuario pida enviarlo
         tipo = nuevos_estados.get("tipo_reporte_activo")
-        if tipo:
-            nuevos_estados[f"ultimo_reporte_{tipo}"] = respuesta
+
+        if "[IMG_B64:" in respuesta:
+            try:
+                img_base64 = respuesta.split("[IMG_B64:")[1].rstrip("]").strip()
+                if tipo:
+                    nuevos_estados["grafico_pendiente_base64"] = img_base64
+                    nuevos_estados["tipo_grafico_pendiente"] = tipo
+            except IndexError:
+                pass
+        else:
+            es_reporte_real = (
+                "Reporte Financiero Ejecutivo" in respuesta
+                or "Reporte de Clientes en Riesgo" in respuesta
+                or "Clientes en Riesgo" in respuesta
+            )
+
+            if tipo and es_reporte_real:
+                nuevos_estados[f"ultimo_reporte_{tipo}"] = respuesta
 
         return respuesta, cat, nuevos_estados
 
@@ -123,24 +139,24 @@ async def _flujo_envio(p_lower: str, nuevos_estados: dict) -> tuple:
     )
 
 
-def _es_relevante(pregunta_lower: str) -> bool:
-    temas = [
-        "churn",
-        "financiero",
-        "datos",
-        "cliente",
-        "reporte",
-        "grafico",
-        "analisis",
-        "ventas",
-        "retencion",
-        "política",
-        "manual",
-        "violet",
-        "ingreso",
-        "ganancia",
-    ]
-    return any(tema in pregunta_lower for tema in temas)
+# def _es_relevante(pregunta_lower: str) -> bool:
+#     temas = [
+#         "churn",
+#         "financiero",
+#         "datos",
+#         "cliente",
+#         "reporte",
+#         "grafico",
+#         "analisis",
+#         "ventas",
+#         "retencion",
+#         "política",
+#         "manual",
+#         "violet",
+#         "ingreso",
+#         "ganancia",
+#     ]
+#     return any(tema in pregunta_lower for tema in temas)
 
 
 def _consultar_documentacion(pregunta, vector_store):
@@ -164,7 +180,8 @@ def _procesar_analisis(pregunta, dfs, vector_store, categoria, historial):
 
     try:
         agente = construir_agente(dfs[clave], vector_store, clave, historial)
-        res = agente.invoke({"input": pregunta, "chat_history": historial})
+        historial_formateado = truncar_historial(historial)
+        res = agente.invoke({"input": pregunta, "chat_history": historial_formateado})
         return res.get("output", "No obtuve respuesta."), categoria
     except Exception as e:
         return f"Error técnico: {str(e)}", categoria

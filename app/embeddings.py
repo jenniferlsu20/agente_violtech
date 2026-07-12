@@ -56,9 +56,11 @@ def cargar_vector_store():
             str(RUTA_DOCS), glob="**/*.pdf", loader_cls=PyMuPDFLoader
         )
         docs = loader.load()
+        docs_unicos = {d.metadata['source']: d for d in docs}.values()
+        print(f"Archivos cargados: {[d.metadata['source'] for d in docs_unicos]}")
 
         splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=80)
-        fragmentos = splitter.split_documents(docs)
+        fragmentos = splitter.split_documents(docs_unicos)
         fragmentos = [f for f in fragmentos if f.page_content.strip()]
 
         if not fragmentos:
@@ -84,11 +86,11 @@ def cargar_vector_store():
             # Ejecuta ambas búsquedas en paralelo/secuencial
             docs_faiss = self.faiss_ret.invoke(query)
             docs_bm25 = self.bm25_ret.invoke(query)
-            
+
             # Intercala y elimina duplicados por contenido para no saturar al agente
             vistos = set()
             docs_combinados = []
-            for doc in (docs_faiss + docs_bm25):
+            for doc in docs_faiss + docs_bm25:
                 if doc.page_content not in vistos:
                     vistos.add(doc.page_content)
                     docs_combinados.append(doc)

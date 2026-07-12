@@ -52,10 +52,33 @@ def cargar_historial():
             return []
     return []
 
+def _sanear_para_persistencia(mensajes:list) -> list:
+    """
+    Devuelve una copia de los mensajes sin el Base64 de los gráficos.
+    Se usa SOLO para lo que se escribe a disco o se reenvia al backend
+    la sesión en memoria (st.session_state.mensajes) conserva el tag
+    completo para que Streamlit pueda seguir renderizando la imagen mientras
+    dure la sesión activa.
+    """
+    saneados = []
+    for m in mensajes:
+        contenido = m.get("contenido", m.get("content", ""))
+        if "[IMG_B64:" in contenido:
+            texto_visible = contenido.split("[IMG_B64:")[0].strip()
+            contenido = f"{texto_visible}\n[Gráfico generado en un turno anterior - no se conserva en el historial]"
+        nuevo_msg = dict(m)
+        if "contenido" in nuevo_msg:
+            nuevo_msg["contenido"] = contenido
+        elif "content" in nuevo_msg:
+            nuevo_msg["content"] = contenido
+        saneados.append(nuevo_msg)
+    return saneados
+    
 
 def guardar_historial(mensajes):
+    mensajes_saneados = _sanear_para_persistencia(mensajes)
     with open(RUTA_HISTORIAL, "w", encoding="utf-8") as f:
-        json.dump(mensajes, f, ensure_ascii=False, indent=4)
+        json.dump(mensajes_saneados, f, ensure_ascii=False, indent=4)
 
 
 def render_footer():
@@ -199,8 +222,11 @@ def main():
             with st.spinner("Violet está analizando..."):
                 try:
                     # Traducimos el historial al formato que exige el backend
+                    historial_saneado = _sanear_para_persistencia(
+                        st.session_state.mensajes[:-1]
+                    )                    
                     historial_api = []
-                    for m in st.session_state.mensajes[:-1]:
+                    for m in historial_saneado:
                         # Usamos .get() por si quedó algún diccionario viejo en memoria
                         rol_api = m.get("rol", m.get("role"))
                         contenido_api = m.get("contenido", m.get("content"))

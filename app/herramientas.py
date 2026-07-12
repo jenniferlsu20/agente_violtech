@@ -31,13 +31,24 @@ class EstadoBot:
 # funciones capaces de leer/escribir archivos, importar módulos o ejecutar
 # código arbitrario adicional, ya que el código a ejecutar proviene de una
 # generación del LLM y no de un desarrollador de confianza.
+_MODULOS_PERMITIDOS_GRAFICO = {"matplotlib", "seaborn", "pandas", "numpy"}
+
+
+def _import_restringido(nombre, globals=None, locals=None, fromlist=(), level=0):
+    raiz = nombre.split(".")[0]
+    if raiz not in _MODULOS_PERMITIDOS_GRAFICO:
+        raise ImportError(
+            f"Import de '{nombre}' no permitido en el entorno de gráficos."
+        )
+    return builtins.__import__(nombre, globals, locals, fromlist, level)
+
+
 _BUILTINS_PELIGROSOS = {
     "eval",
     "exec",
     "open",
     "compile",
     "input",
-    "__import__",
     "exit",
     "quit",
     "help",
@@ -45,6 +56,7 @@ _BUILTINS_PELIGROSOS = {
 BUILTINS_RESTRINGIDOS = {
     k: v for k, v in vars(builtins).items() if k not in _BUILTINS_PELIGROSOS
 }
+BUILTINS_RESTRINGIDOS["__import__"] = _import_restringido
 
 
 def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
@@ -595,7 +607,9 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
         # Adjuntamos el gráfico solo si pertenece al mismo tipo de reporte que se envía
         if EstadoBot.tipo_grafico_pendiente == tipo and EstadoBot.ultimo_grafico_base64:
             contexto_sesion["tipo_grafico_pendiente"] = EstadoBot.tipo_grafico_pendiente
-            contexto_sesion["grafico_pendiente_base64"] = EstadoBot.ultimo_grafico_base64
+            contexto_sesion["grafico_pendiente_base64"] = (
+                EstadoBot.ultimo_grafico_base64
+            )
 
         # 3. procesar_confirmacion_envio ya genera el PDF
         mensaje, _ = asyncio.run(

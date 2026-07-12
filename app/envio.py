@@ -211,7 +211,7 @@ async def enviar_por_telegram(
     }
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(url, data=data, files=files, timeout=20.0)
             resultado = response.json()
 

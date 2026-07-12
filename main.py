@@ -100,9 +100,6 @@ async def chat_endpoint(request: ChatRequest):
         # Reconstruir el estado del último reporte a partir del historial
         _sincronizar_estado_reporte_desde_historial(request.historial)
 
-        # Ejecutamos el router
-        # categoria = clasificar(request.pregunta)
-
         # Invocamos la función asíncrona pura
         respuesta, categoria, nuevo_contexto = await procesar(
             pregunta=request.pregunta,
