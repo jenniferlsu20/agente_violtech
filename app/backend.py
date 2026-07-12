@@ -1,13 +1,23 @@
 import json
 from pathlib import Path
-from langchain.prompts import PromptTemplate
-from langchain.schema.output_parser import StrOutputParser
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 # Importaciones locales (se adaptarán para recibir parámetros explícitos)
-from config import RUTA_CHURN, RUTA_STORE, RUTA_HISTORIAL, RUTA_DATOS, cargar_dataframes
-from envio import es_destino_seguro, manejar_datos_contacto, procesar_confirmacion_envio
-from agente import construir_agente, llm
-from router import clasificar
+from app.config import (
+    RUTA_CHURN,
+    RUTA_STORE,
+    RUTA_HISTORIAL,
+    RUTA_DATOS,
+    cargar_dataframes,
+)
+from app.envio import (
+    es_destino_seguro,
+    manejar_datos_contacto,
+    procesar_confirmacion_envio,
+)
+from app.agente import construir_agente, llm
+from app.router import clasificar
 
 
 async def procesar(
@@ -44,7 +54,12 @@ async def procesar(
         )
 
     # 4. CLASIFICACIÓN Y PROCESAMIENTO
-    categoria = clasificar(pregunta)
+    # Le pasamos al router el tipo de reporte activo de la sesión, para que
+    # respuestas ambiguas (ej. "sí", "genera el gráfico") no pierdan el
+    # contexto de si veníamos de CHURN o FINANZAS.
+    categoria_previa = nuevos_estados.get("tipo_reporte_activo")
+    categoria_anterior = "CHURN" if categoria_previa == "churn" else "FINANZAS"
+    categoria = clasificar(pregunta, categoria_anterior=categoria_anterior)
 
     # Actualizar estado de reporte activo en el diccionario de retorno
     if categoria in ["CHURN", "FINANZAS"]:

@@ -41,7 +41,7 @@ def truncar_historial(
             mensajes_convertidos.append(HumanMessage(content=contenido))
         elif rol in ("assistant", "ai", "Violet"):
             if len(contenido) > max_chars:
-                contenido = contenido[:max_chars] + "… [reporte truncado, ya generado]"
+                contenido = "[reporte truncado, ya generado] …" + contenido[-max_chars:]
             mensajes_convertidos.append(AIMessage(content=contenido))
 
     return mensajes_convertidos

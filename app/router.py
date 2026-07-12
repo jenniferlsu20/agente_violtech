@@ -228,6 +228,32 @@ def clasificar(pregunta: str, categoria_anterior: str = "FINANZAS") -> str:
     if any(w in p for w in palabras_grafico):
         return categoria_anterior
 
+    # ── Confirmaciones cortas de seguimiento (ej. respuesta a una sugerencia
+    # de gráfico o a una pregunta de Violet) — mantenemos el contexto en vez
+    # de mandarlas al LLM router genérico, donde arriesgan caer en
+    # FUERA_SCOPE por no tener suficiente contenido semántico.
+    confirmaciones_cortas = [
+        "si",
+        "sí",
+        "dale",
+        "ok",
+        "okay",
+        "claro",
+        "hazlo",
+        "adelante",
+        "ese",
+        "esa",
+        "el que sugeriste",
+        "la que sugeriste",
+        "el sugerido",
+        "la sugerida",
+    ]
+    if p in confirmaciones_cortas or any(
+        p == c or p.startswith(c + " ") or p.startswith(c + ",")
+        for c in confirmaciones_cortas
+    ):
+        return categoria_anterior
+
     # ── LLM router — solo para preguntas ambiguas ─────────────────────────
     try:
         resultado = (
