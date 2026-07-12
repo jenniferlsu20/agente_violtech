@@ -218,9 +218,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# FAISS
-faiss_index/
-
 __pycache__/
 *.pyc
 .streamlit/
