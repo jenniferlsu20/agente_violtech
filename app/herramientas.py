@@ -1,6 +1,7 @@
 import io
 import re
 import base64
+import builtins
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -12,6 +13,38 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_experimental.tools import PythonAstREPLTool
 from app.envio import procesar_confirmacion_envio
 from app.config import TELEGRAM_CHAT_ID
+
+
+class EstadoBot:
+    """
+    Estado compartido del último reporte generado, a nivel de módulo
+    para que persista entre llamadas a crear_herramientas() dentro del
+    mismo proceso, y sea importable desde main.py.
+    """
+
+    ultimo_reporte_financiero = ""
+    ultimo_reporte_churn = ""
+    tipo_activo = ""
+
+
+# Builtins restringidos para exec() en generar_grafico: se excluyen las
+# funciones capaces de leer/escribir archivos, importar módulos o ejecutar
+# código arbitrario adicional, ya que el código a ejecutar proviene de una
+# generación del LLM y no de un desarrollador de confianza.
+_BUILTINS_PELIGROSOS = {
+    "eval",
+    "exec",
+    "open",
+    "compile",
+    "input",
+    "__import__",
+    "exit",
+    "quit",
+    "help",
+}
+BUILTINS_RESTRINGIDOS = {
+    k: v for k, v in vars(builtins).items() if k not in _BUILTINS_PELIGROSOS
+}
 
 
 def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
@@ -87,7 +120,7 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
         Genera visualizaciones automáticas del DataFrame y devuelve Base64.
         """
         # Usamos el contexto real que nos pasa el Router
-        contexto = "CHURN" if "Churn" in nombre_df else "FINANZAS"
+        contexto = "CHURN" if "churn" in nombre_df.lower() else "FINANZAS"
 
         # Definimos los contextos de columnas
         datasets = {
@@ -149,7 +182,17 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
             codigo = match.group(1).strip() if match else codigo_bruto.strip()
             codigo = codigo.replace("plt.show()", "")
 
-            exec(codigo, {"df": df, "plt": plt, "sns": sns, "pd": pd}, {})
+            exec(
+                codigo,
+                {
+                    "__builtins__": BUILTINS_RESTRINGIDOS,
+                    "df": df,
+                    "plt": plt,
+                    "sns": sns,
+                    "pd": pd,
+                },
+                {},
+            )
             fig = plt.gcf()
 
             buf = io.BytesIO()
@@ -219,7 +262,7 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
         except Exception as ex:
             return f"Error técnico al consultar el dataset de Churn: {str(ex)}"
 
-    @tool("Reporte Clientes en Riesgo", return_direct=False)
+    @tool("Reporte Clientes en Riesgo", return_direct=True)
     def reporte_clientes_riesgo(parametros: str) -> str:
         """
         Genera un reporte ejecutivo de clientes en riesgo de churn
@@ -385,20 +428,19 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
             ]
 
             texto_final = "\n".join(lineas)
-
+            EstadoBot.ultimo_reporte_churn = texto_final
+            EstadoBot.tipo_activo = "churn"
             return texto_final
 
         except Exception as ex:
             return f"Error generando reporte: {str(ex)}"
 
-    @tool("Reporte Financiero Ejecutivo", return_direct=False)
+    @tool("Reporte Financiero Ejecutivo", return_direct=True)
     def reporte_financiero_ejecutivo(parametros: str) -> str:
         """
         Genera un reporte financiero detallado del dataset de Superstore.
         Argumento 'parametros': Palabras clave de la consulta del usuario.
         """
-        global ultimo_reporte_generado
-
         try:
             # Limpiamos espacios en blanco de los nombres de columnas
             df.columns = df.columns.str.strip()
@@ -419,7 +461,10 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
             # 2. Análisis de pérdidas
             negativos = df[df["Profit"] < 0]
             pct_perdida = (len(negativos) / len(df)) * 100
-            peor_cat = negativos.groupby("Category")["Profit"].sum().idxmin()
+            if not negativos.empty:
+                peor_cat = negativos.groupby("Category")["Profit"].sum().idxmin()
+            else:
+                peor_cat = "N/A (sin pérdidas registradas en el periodo)"
 
             # 3. Rentabilidad por Segmento (Resumen)
             seg = df.groupby("Segment")["Profit"].sum()
@@ -469,20 +514,16 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
 
             texto_final = "\n".join(lineas)
 
-            ultimo_reporte_generado = texto_final
-
+            EstadoBot.ultimo_reporte_financiero = texto_final
+            EstadoBot.tipo_activo = "financiero"
             return texto_final
 
         except Exception as ex:
             return f"Error al generar el reporte financiero: {str(ex)}"
 
-    class EstadoBot:
-        ultimo_reporte_financiero = ""
-        ultimo_reporte_churn = ""
-
     GRUPO_VIOLET = TELEGRAM_CHAT_ID
 
-    @tool("Enviar Reporte a Canal", return_direct=False)
+    @tool("Enviar Reporte a Canal", return_direct=True)
     def tool_enviar_reporte(parametros_json: str) -> str:
         """
         Envía el último reporte generado por el sistema.
@@ -504,17 +545,19 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
             inicio = texto_limpio.find("{")
             fin = texto_limpio.rfind("}")
             if inicio == -1 or fin == -1 or fin < inicio:
-                raise json.JSONDecodeError("No se encontró un objeto JSON", texto_limpio, 0)
+                raise json.JSONDecodeError(
+                    "No se encontró un objeto JSON", texto_limpio, 0
+                )
 
-            texto_json = texto_limpio[inicio:fin + 1]
+            texto_json = texto_limpio[inicio : fin + 1]
             argumentos = json.loads(texto_json)
         except json.JSONDecodeError:
             return (
-                'Error de formato en el JSON recibido. Vuelve a intentar con '
-                'EXACTAMENTE este formato, sin texto adicional antes ni después: '
+                "Error de formato en el JSON recibido. Vuelve a intentar con "
+                "EXACTAMENTE este formato, sin texto adicional antes ni después: "
                 '{"canal": "gmail", "destino": "usuario@gmail.com"}'
             )
-            
+
         canal = argumentos.get("canal")
         destino = argumentos.get("destino")
 
@@ -529,11 +572,16 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
             destino = GRUPO_VIOLET
 
         # 2. Fuente única de verdad para el reporte activo — EstadoBot
-        if EstadoBot.ultimo_reporte_churn:
-            tipo = "churn"
-        elif EstadoBot.ultimo_reporte_financiero:
-            tipo = "financiero"
-        else:
+        # Se usa tipo_activo (marcado en el momento de generar cada reporte)
+        # en vez de adivinar por prioridad fija, para respetar cuál fue
+        # generado más recientemente en la sesión.
+        tipo = EstadoBot.tipo_activo
+        if tipo == "churn" and not EstadoBot.ultimo_reporte_churn:
+            tipo = ""
+        elif tipo == "financiero" and not EstadoBot.ultimo_reporte_financiero:
+            tipo = ""
+
+        if not tipo:
             return "❌ No hay ningún reporte generado previamente para enviar."
 
         contexto_sesion = {
@@ -544,6 +592,10 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
                 else EstadoBot.ultimo_reporte_financiero
             ),
         }
+        # Adjuntamos el gráfico solo si pertenece al mismo tipo de reporte que se envía
+        if EstadoBot.tipo_grafico_pendiente == tipo and EstadoBot.ultimo_grafico_base64:
+            contexto_sesion["tipo_grafico_pendiente"] = EstadoBot.tipo_grafico_pendiente
+            contexto_sesion["grafico_pendiente_base64"] = EstadoBot.ultimo_grafico_base64
 
         # 3. procesar_confirmacion_envio ya genera el PDF
         mensaje, _ = asyncio.run(
@@ -557,6 +609,11 @@ def crear_herramientas(df: pd.DataFrame, vector_store, nombre_df: str, llm):
             EstadoBot.ultimo_reporte_churn = ""
         else:
             EstadoBot.ultimo_reporte_financiero = ""
+
+        # Limpiar también el gráfico si era el que se acaba de adjuntar
+        if EstadoBot.tipo_grafico_pendiente == tipo:
+            EstadoBot.ultimo_grafico_base64 = ""
+            EstadoBot.tipo_grafico_pendiente = ""
 
         return mensaje
 

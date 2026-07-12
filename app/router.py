@@ -1,3 +1,4 @@
+import re
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_cohere import ChatCohere
@@ -75,8 +76,6 @@ def clasificar(pregunta: str, categoria_anterior: str = "FINANZAS") -> str:
         "por categoria",
         "sub-categoría",
         "sub-categoria",
-        "regla del 20",
-        "umbral del 20",
         "ventas totales",
         "ganancia total",
         "ganancias totales",
@@ -94,7 +93,7 @@ def clasificar(pregunta: str, categoria_anterior: str = "FINANZAS") -> str:
         "que son",
         "qué hace",
         "que hace",
-        "cómo funciona routerdatos",
+        "cómo funciona router datos",
         "como funciona router",
         "cómo funciona violet",
         "como funciona violet",
@@ -114,10 +113,6 @@ def clasificar(pregunta: str, categoria_anterior: str = "FINANZAS") -> str:
         "cual es la diferencia",
         "qué diferencia",
         "que diferencia",
-        "qué es violet",
-        "que es violet",
-        "cómo funciona violet",
-        "como funciona violet",
         "qué es violet",
         "que es violet",
         "manual de violet",
@@ -141,7 +136,6 @@ def clasificar(pregunta: str, categoria_anterior: str = "FINANZAS") -> str:
         "churn_prob",
         "risk_level",
         "customerid",
-        "id",
         "tenure",
         "techsupport",
         "onlinesecurity",
@@ -150,6 +144,8 @@ def clasificar(pregunta: str, categoria_anterior: str = "FINANZAS") -> str:
         "cancelacion",
         "cancelación",
         "fideliz",
+        "fidelización",
+        "fidelizacion",
         "scored",
         "telco",
         "telecom",
@@ -170,8 +166,10 @@ def clasificar(pregunta: str, categoria_anterior: str = "FINANZAS") -> str:
         "furniture",
         "categorías",
         "categorias",
+        "sub-categorías",
         "sub-categorias",
         "sub-categoría",
+        "sub-categoria",
         "subcategorias",
         "subcategorías",
         "technology",
@@ -209,6 +207,7 @@ def clasificar(pregunta: str, categoria_anterior: str = "FINANZAS") -> str:
         "definicion",
         "arquitectura",
         "violet",
+        "Violet",
         "violtech",
     ]:
         if w in p:
@@ -245,7 +244,8 @@ def clasificar(pregunta: str, categoria_anterior: str = "FINANZAS") -> str:
 
     return "FUERA_SCOPE"
 
-PALABRAS_TELEGRAM = ("telegram", "telegrama", "Telegram")
+
+PALABRAS_TELEGRAM = ("telegram", "telegrama")
 PALABRAS_GMAIL = ("gmail", "correo", "email", "e-mail", "mail")
 PALABRAS_NEGATIVAS = (
     "no",
@@ -276,21 +276,22 @@ PALABRAS_AFIRMATIVAS = (
     "adelante",
 )
 
+
 def analizar_intencion_envio(texto: str):
     t = texto.lower()
-    
+
     # 1. ¿Es una negativa?
-    if any(p in t for p in PALABRAS_NEGATIVAS):
+    if any(re.search(rf"\b{re.escape(p)}\b", t) for p in PALABRAS_NEGATIVAS):
         return {"accion": "CANCELAR", "canal": None}
-    
+
     # 2. ¿Es una afirmativa?
-    if any(p in t for p in PALABRAS_AFIRMATIVAS):
+    if any(re.search(rf"\b{re.escape(p)}\b", t) for p in PALABRAS_AFIRMATIVAS):
         canal = None
-        if any(p in t for p in PALABRAS_TELEGRAM):
+        if any(re.search(rf"\b{re.escape(p)}\b", t) for p in PALABRAS_TELEGRAM):
             canal = "telegram"
-        elif any(p in t for p in PALABRAS_GMAIL):
+        elif any(re.search(rf"\b{re.escape(p)}\b", t) for p in PALABRAS_GMAIL):
             canal = "gmail"
-        
+
         return {"accion": "CONFIRMAR", "canal": canal}
-        
+
     return {"accion": "CONTINUAR_NORMAL", "canal": None}

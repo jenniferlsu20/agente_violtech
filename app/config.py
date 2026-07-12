@@ -3,7 +3,7 @@ import pandas as pd
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Cargar variables e entorno
+# Cargar variables de entorno
 load_dotenv()
 
 # Rutas base
@@ -24,7 +24,7 @@ MODELO_LLM = "command-r-plus-08-2024"
 # Claves de API (Se leen desde .env)
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 
-# Credenciales de ServicioTELEGRAM_CHAT_ID
+# Credenciales de Servicio TELEGRAM_CHAT_ID
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_APP_PASSWORD = os.getenv("SMTP_APP_PASSWORD")
 # Servidor y Puerto estándar de Gmail (usando SSL)

@@ -7,12 +7,19 @@ from contextlib import asynccontextmanager
 from langchain_core.globals import set_debug
 
 # Importaciones de tu lógica modular en la carpeta app/
-from app.agente import procesar
+from app.backend import procesar, cargar_dataframes
 from app.embeddings import cargar_vector_store
-from app.config import cargar_dataframes
 from app.router import clasificar
+from app.herramientas import EstadoBot
 
 set_debug(os.getenv("VIOLET_DEBUG", "false").lower() == "true")
+
+
+class ChatRequest(BaseModel):
+    pregunta: str
+    historial: List[Dict[str, Any]] = []
+    contexto_sesion: Optional[Dict[str, Any]] = {}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -29,13 +36,10 @@ async def lifespan(app: FastAPI):
         print(
             "✅ [Violet API] DataFrames y Vector Store cargados con éxito en memoria RAM."
         )
-    except Exception as e:
-        print(f"❌ [Violet API] Error crítico durante la inicialización: {str(e)}")
-        # Fallback preventivo para evitar que el contenedor colapse por completo
+        yield
+    finally:
+        print("🛑 [Violet API] Liberando recursos.")
         app.state.dfs = {}
-        app.state.vs = None
-    yield
-    print("🛑 [Violet API] Liberando recursos y apagando servidor.")
 
 
 # Instanciamos FastAPI con el manejador de ciclo de vida
@@ -56,12 +60,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# --- MODELOS DE VALIDACIÓN (PYDANTIC) ---
-class ChatRequest(BaseModel):
-    pregunta: str
-    historial: List[Dict[str, Any]]
 
 
 # --- ENDPOINTS ---
@@ -99,22 +97,56 @@ async def chat_endpoint(request: ChatRequest):
         )
 
     try:
-        # Ejecutamos el router
-        categoria = clasificar(request.pregunta)
+        # Reconstruir el estado del último reporte a partir del historial
+        _sincronizar_estado_reporte_desde_historial(request.historial)
 
-        # Invocamos la función asíncrona pura de app/agente.py
-        respuesta, _ = await procesar(
+        # Ejecutamos el router
+        # categoria = clasificar(request.pregunta)
+
+        # Invocamos la función asíncrona pura
+        respuesta, categoria, nuevo_contexto = await procesar(
             pregunta=request.pregunta,
             dfs=app.state.dfs,
             vector_store=app.state.vs,
-            categoria=categoria,
             historial=request.historial,
+            contexto_sesion=request.contexto_sesion,
         )
 
-        return {"respuesta": respuesta, "categoria": categoria}
+        return {
+            "respuesta": respuesta,
+            "categoria": categoria,
+            "contexto_sesion": nuevo_contexto,
+        }
 
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error interno en el motor de ejecución del agente: {str(e)}",
         )
+
+
+def _sincronizar_estado_reporte_desde_historial(historial: list):
+    """
+    Busca el último reporte generado por Violet en el historial recibido
+    y lo escribe en EstadoBot, para que la tool de envío lo encuentre
+    aunque esta petición HTTP sea atendida por un proceso/worker distinto
+    al que generó el reporte originalmente.
+    """
+
+    for msg in reversed(historial):
+        rol = msg.get("role") or msg.get("rol", "")
+        contenido = msg.get("content") or msg.get("contenido", "")
+        if rol not in ("assistant", "Violet"):
+            continue
+
+        if "Reporte Financiero Ejecutivo" in contenido:
+            EstadoBot.ultimo_reporte_financiero = contenido
+            EstadoBot.tipo_activo = "financiero"
+            return
+        elif (
+            "Reporte de Clientes en Riesgo" in contenido
+            or "Clientes en Riesgo" in contenido
+        ):
+            EstadoBot.ultimo_reporte_churn = contenido
+            EstadoBot.tipo_activo = "churn"
+            return

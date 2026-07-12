@@ -2,6 +2,7 @@ import streamlit as st
 import time
 import requests
 import json
+import base64
 import pathlib
 
 # URL de tu API de FastAPI.
@@ -52,9 +53,9 @@ def cargar_historial():
     return []
 
 
-def guardar_historial(historial):
+def guardar_historial(mensajes):
     with open(RUTA_HISTORIAL, "w", encoding="utf-8") as f:
-        json.dump(historial, f, ensure_ascii=False, indent=4)
+        json.dump(mensajes, f, ensure_ascii=False, indent=4)
 
 
 def render_footer():
@@ -66,7 +67,7 @@ def render_footer():
 
 def main():
     st.set_page_config(
-        page_title="Violet — ViolTech",
+        page_title="Violet | ViolTech",
         page_icon="imagen/avatar_ppal_violet.png",
         layout="wide",
     )
@@ -134,6 +135,7 @@ def main():
         if st.button("🗑️ Nueva conversación", use_container_width=True):
             st.session_state.mensajes = []
             st.session_state.ultima_categoria = None
+            st.session_state.contexto_sesion = {}
             if RUTA_HISTORIAL.exists():
                 RUTA_HISTORIAL.unlink()
             st.rerun()
@@ -150,6 +152,9 @@ def main():
                 }
             ]
         st.session_state.mensajes = historial_guardado
+
+    if "contexto_sesion" not in st.session_state:
+        st.session_state.contexto_sesion = {}
 
     # Renderizar conversación
     for msg in st.session_state.mensajes:
@@ -207,6 +212,7 @@ def main():
                     payload = {
                         "pregunta": pregunta,
                         "historial": historial_api,
+                        "contexto_sesion": st.session_state.contexto_sesion,
                     }
 
                     # Consumo asíncrono simulado mediante un request HTTP POST con timeout
@@ -217,23 +223,31 @@ def main():
                         data = response.json()
                         respuesta = data["respuesta"]
                         categoria = data["categoria"]
+                        st.session_state.contexto_sesion = data.get(
+                            "contexto_sesion", st.session_state.contexto_sesion
+                        )
                     else:
+                        data = {
+                            "error": f"HTTP {response.status_code}",
+                            "detalle": response.text,
+                        }
                         respuesta = f"❌ Error en el servidor backend (Código {response.status_code}): {response.text}"
                         categoria = "FUERA_SCOPE"
 
                 except requests.exceptions.RequestException as e:
+                    data = {"error": "RequestException", "detalle": str(e)}
                     respuesta = f"❌ No se pudo conectar con el servidor de Violet en Render. Verifica la URL. Detalles: {str(e)}"
                     categoria = "FUERA_SCOPE"
 
                 # Desplegar resultados de la API
                 st.markdown(respuesta)
-                
+
                 with st.expander("🛠️ Ver JSON de depuración"):
                     st.write("Payload enviado a FastAPI:")
-                    st.json(payload) # Muestra lo que Streamlit mandó
+                    st.json(payload)  # Muestra lo que Streamlit mandó
                     st.write("Respuesta cruda del servidor:")
-                    st.json(data)    # Muestra el JSON exacto que devolvió FastAPI
-                
+                    st.json(data)  # Muestra el JSON exacto que devolvió FastAPI
+
                 if categoria in BADGES:
                     emoji, texto = BADGES[categoria]
                     st.caption(f"{emoji} {texto}")

@@ -192,28 +192,27 @@ def generar_pdf_reporte(
 
 
 async def enviar_por_telegram(
-    buffer_pdf: io.BytesIO, filename: str = "reporte_violtech.pdf"
+    buffer_pdf, filename: str = "reporte_violtech.pdf"
 ) -> str:
     """Envía el PDF de forma asíncrona mediante la API de Bots de Telegram."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return "Error: Credenciales de Telegram no configuradas en el servidor."
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    buffer_pdf.seek(0)
     contenido_pdf = buffer_pdf.read() if hasattr(buffer_pdf, "read") else buffer_pdf
     files = {"document": (filename, contenido_pdf, "application/pdf")}
     data = {
         "chat_id": TELEGRAM_CHAT_ID,
         "caption": (
-            "📊 *¡Hola!* éste es el reporte interactivo en PDF que me solicitaste,"
-            "lo puedes visualizar ingresando al grupo Violet_Reportes."
+            "📊 *¡Hola!* éste es el reporte interactivo en PDF que me solicitaste, "
+            "lo puedes visualizar ingresando al grupo Violet_Reports."
         ),
         "parse_mode": "Markdown",
     }
 
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, data=data, files=files, timeout=160)
+            response = await client.post(url, data=data, files=files, timeout=20.0)
             resultado = response.json()
 
             if not resultado.get("ok"):
@@ -247,7 +246,7 @@ def _enviar_smtp_sincrono(buffer_pdf, destino: str, filename: str) -> str:
 
     try:
         # Uso estricto de SSL/TLS para seguridad corporativa
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=160) as server:
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=15) as server:
             server.login(SMTP_USER, SMTP_APP_PASSWORD)
             server.sendmail(SMTP_USER, destino, msg.as_string())
         return "Exitoso"
@@ -261,36 +260,6 @@ async def enviar_por_gmail(
     """Envía el PDF por correo delegando la tarea síncrona de SMTP a un hilo secundario (non-blocking)."""
     return await asyncio.to_thread(_enviar_smtp_sincrono, buffer_pdf, destino, filename)
 
-
-# async def enviar_reporte(tipo_reporte: str, canal: str, destino: str, contexto_sesion: dict) -> str:
-#     """Punto de entrada principal para el agente (Stateless para FastAPI)."""
-#     canal = canal.lower()
-
-#     # 1. Ajuste de destino para Telegram
-#     if canal == "telegram":
-#         destino = TELEGRAM_CHAT_ID
-
-#     # 2. Validación de seguridad
-#     if not es_destino_seguro(destino, canal):
-#         if canal == "gmail":
-#             return "⚠️ Para enviarte el reporte por Gmail, por favor facilítame tu dirección de correo electrónico (ejemplo: usuario@gmail.com)."
-#         return (
-#             "❌ Error: Canal de envío no soportado o configuración de grupo inválida."
-#         )
-
-# # 3. Lógica de generación y envío
-# contenido = contexto_sesion.get(f"ultimo_reporte_{tipo_reporte.lower()}")
-# if not contenido:
-#     return f"❌ No encontré un reporte {tipo_reporte} activo."
-
-# buffer = generar_pdf_reporte(contenido, tipo_reporte)
-
-# if canal == "gmail":
-#     status = await enviar_por_gmail(buffer, destino)
-# else:
-#     status = await enviar_por_telegram(buffer)  # Telegram ya tiene su ID configurado internamente
-
-# return f"✅ {status}"
 
 # --- 4. ORQUESTADOR CENTRAL DE ENVÍO (STATELESS) ---
 
@@ -343,24 +312,17 @@ async def procesar_confirmacion_envio(
 
     # 3. Ejecutar los motores asíncronos de envío según el canal elegido
     try:
-        if canal == "gmail":
+        if canal_norm == "gmail":
             if not destino:
                 return (
                     "❌ Error: Se requiere un correo de destino válido para realizar el envío por Gmail.",
                     nuevos_estados,
                 )
             resultado = await enviar_por_gmail(buffer_pdf, destino)
-        elif canal == "telegram":
+        elif canal_norm == "telegram":
             resultado = await enviar_por_telegram(buffer_pdf)
         else:
             return "❌ Canal de envío no reconocido.", nuevos_estados
-
-        # 4. Evaluación del resultado final y reinicio/limpieza de banderas de control
-        if resultado != "Exitoso":
-            return (
-                f"❌ Hubo un inconveniente con los servidores de envío: {resultado}",
-                nuevos_estados,
-            )
 
         # Limpieza pura del diccionario de sesión
         nuevos_estados.pop("grafico_pendiente_base64", None)
@@ -375,7 +337,7 @@ async def procesar_confirmacion_envio(
         }
 
         return (
-            f"✅ ¡El reporte en PDF ha sido generado y enviado exitosamente vía {canal.capitalize()}!",
+            f"✅ ¡El reporte en PDF ha sido generado y enviado exitosamente vía {canal_norm.capitalize()}!",
             nuevos_estados,
         )
 

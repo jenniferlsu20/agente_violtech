@@ -9,7 +9,7 @@ from langchain_core.prompts import (
 )
 from langchain_core.output_parsers import StrOutputParser
 from app.config import COHERE_API_KEY, MODELO_LLM, VENTANA_MEMORIA
-from app.herramientas import crear_herramientas
+from app.herramientas import crear_herramientas, EstadoBot
 from app.prompts import PROMPT_VIOLET
 from app.router import analizar_intencion_envio
 
@@ -21,28 +21,27 @@ llm = ChatCohere(
 )
 
 
-def obtener_memoria(historial: list) -> list:
-    """Convierte el historial de chat en mensajes compatibles con LangChain.
-
-    El historial se recorta usando la ventana de memoria configurada para
-    conservar el mismo número de preguntas y respuestas.
+def truncar_historial(
+    historial: list, ventana: int = VENTANA_MEMORIA, max_chars: int = 200
+) -> list:
     """
+    Convierte el historial en mensajes LangChain, recortando las respuestas
+    largas (reportes) para no inflar tokens en cada llamada al LLM.
+    El usuario ya vio el reporte completo en pantalla — no hace falta
+    repetirlo íntegro en el contexto de los turnos siguientes.
+    """
+    mensajes_filtrados = historial[-(ventana * 2) :] if ventana > 0 else historial
+
     mensajes_convertidos = []
-
-    # Conservamos exactamente tu lógica de ventana protectora (k * 2 mensajes)
-    # Ej: Si VENTANA_MEMORIA = 5, tomará los últimos 10 mensajes (5 preguntas y 5 respuestas)
-    mensajes_filtrados = (
-        historial[-(VENTANA_MEMORIA * 2) :] if VENTANA_MEMORIA > 0 else historial
-    )
-
     for msg in mensajes_filtrados:
-        # Soportamos tanto tus llaves nativas 'rol'/'contenido' como las de respaldo
         rol = msg.get("rol") or msg.get("role")
-        contenido = msg.get("contenido") or msg.get("content")
+        contenido = msg.get("contenido") or msg.get("content") or ""
 
         if rol == "user":
             mensajes_convertidos.append(HumanMessage(content=contenido))
-        elif rol in ["assistant", "ai"]:
+        elif rol in ("assistant", "ai", "Violet"):
+            if len(contenido) > max_chars:
+                contenido = contenido[:max_chars] + "… [reporte truncado, ya generado]"
             mensajes_convertidos.append(AIMessage(content=contenido))
 
     return mensajes_convertidos
@@ -69,46 +68,14 @@ def construir_agente(df, vector_store, nombre_df: str, historial: list):
     agente = create_react_agent(llm, tools, prompt)
 
     return AgentExecutor(
-        agent=agente, tools=tools, verbose=True, handle_parsing_errors=True
+        agent=agente,
+        tools=tools,
+        verbose=True,
+        handle_parsing_errors=True,
+        max_iterations=6,
+        max_execution_time=45,
+        return_intermediate_steps=False,
     )
-    
-
-_FRASES_RECHAZO_ENVIO = (
-    "no puedo enviar", "no estoy autorizada", "no pude enviar",
-    "asegúrate de que se haya generado", "hubo un inconveniente",
-    "no puedo procesar el envío",
-)
-
-def formatear_historial(historial: list, ventana: int = VENTANA_MEMORIA) -> str:
-    """
-    Convierte el historial en un string compacto para el prompt.
-    Excluye rechazos de envío previos — si se dejan, el modelo los
-    imita en turnos futuros en vez de reintentar la herramienta
-    (efecto de anclaje sobre su propia respuesta anterior).
-    """
-    if not historial:
-        return "Sin historial previo."
-
-    turnos = []
-    for msg in historial[-(ventana * 2):]:
-        rol = msg.get("rol") or msg.get("role", "")
-        contenido = msg.get("contenido") or msg.get("content", "")
-
-        # No arrastrar intentos fallidos de envío al contexto futuro
-        if rol in ("assistant", "Violet") and any(
-            frase in contenido.lower() for frase in _FRASES_RECHAZO_ENVIO
-        ):
-            continue
-
-        if rol in ("assistant", "Violet") and len(contenido) > 120:
-            contenido = contenido[:117] + "…"
-
-        if rol == "user":
-            turnos.append(f"Usuario: {contenido}")
-        elif rol in ("assistant", "Violet"):
-            turnos.append(f"Violet: {contenido}")
-
-    return "\n".join(turnos) if turnos else "Sin historial previo."
 
 
 async def procesar(
@@ -144,7 +111,17 @@ async def procesar(
             return f"Error técnico en el módulo de Políticas: {str(e)}", categoria
 
     # 3. PREPARACIÓN DE DATOS (Variables comunes)
-    clave = "churn" if categoria in ["CHURN", "ACCION_ENVIO"] else "superstore"
+    if categoria == "ACCION_ENVIO":
+        # El envío no depende del dataset de churn por defecto: usamos el
+        # tipo de reporte realmente activo (EstadoBot), con fallback a
+        # "churn" solo si aún no se ha generado ningún reporte en la sesión.
+        tipo_activo = EstadoBot.tipo_activo or "churn"
+        clave = "churn" if tipo_activo == "churn" else "superstore"
+    elif categoria == "CHURN":
+        clave = "churn"
+    else:
+        clave = "superstore"
+
     nombre = (
         "Agente de Envíos"
         if categoria == "ACCION_ENVIO"
@@ -155,40 +132,27 @@ async def procesar(
         )
     )
 
-    if clave not in dfs:
-        return (
-            f"Error: El dataset operativo '{clave}' no se encuentra cargado.",
-            categoria,
-        )
-
     # 4. PROCESAMIENTO DEL HISTORIAL
-    historial_formateado = []
-    for m in historial:
-        # Filtro de seguridad: mantenemos el reporte si estamos en modo envío
-        if "Reporte" in m.get("content", "") and categoria != "ACCION_ENVIO":
-            continue
+    historial_formateado = truncar_historial(historial)
 
-        if m["role"] == "user":
-            historial_formateado.append(HumanMessage(content=m["content"]))
-        else:
-            historial_formateado.append(AIMessage(content=m["content"]))
-
-    # 5. LÓGICA DE ACCIÓN DE ENVÍO
+    # 5. INVOCACIÓN DEL AGENTE (CHURN / FINANZAS / ACCION_ENVIO)
     pregunta_final = pregunta
     if categoria == "ACCION_ENVIO":
         intencion = analizar_intencion_envio(pregunta)
         if intencion["accion"] == "CANCELAR":
             return "Entendido, no realizaré el envío del reporte.", categoria
         if intencion["accion"] == "CONFIRMAR" and intencion["canal"]:
-            pregunta_final = f"{pregunta} [INSTRUCCIÓN DEL SISTEMA: Usuario confirmó envío por {intencion['canal']}. Usa la herramienta 'Enviar Reporte a Canal'.]"
+            pregunta_final = (
+                f"{pregunta} [INSTRUCCIÓN DEL SISTEMA: Usuario confirmó envío por "
+                f"{intencion['canal']}. Usa la herramienta 'Enviar Reporte a Canal'.]"
+            )
 
-    # 6. INVOCACIÓN DEL AGENTE (CHURN / FINANZAS / ACCION_ENVIO)
+    # 6. INVOCACIÓN DEL AGENTE
     try:
         agente = construir_agente(dfs[clave], vector_store, nombre, historial)
         resultado = await agente.ainvoke(
             {"input": pregunta_final, "chat_history": historial_formateado}
         )
-        # Retornamos el resultado y la categoría consistentemente
         return resultado["output"], categoria
 
     except Exception as e:
