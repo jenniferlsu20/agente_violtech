@@ -126,6 +126,25 @@ def main():
             st.session_state.show_about = False
             st.rerun()
 
+        if st.button("❓ Pregúntale a Violet", use_container_width=True):
+        st.session_state.show_preguntas = True
+        st.session_state.show_about = False # Aseguramos que el otro se cierre
+
+        if st.session_state.get("show_preguntas", False):
+            st.info("""
+                ### Ejemplos de consulta:
+                - ¿Cuántos clientes tienen riesgo Alto? (Churn)
+                - Crea un gráfico de la tasa de churn por tipo de contrato (Churn)
+                - Genera un reporte ejecutivo de clientes en riesgo Alto (Churn)
+                - ¿Cuántas transacciones pierden dinero? (Finanzas)
+                - Genera un reporte financiero ejecutivo de Superstore (Finanzas)
+                - ¿Cuál es la regla del 20%? (Políticas)
+                - ¿Cómo funciona el router de Violet? (Política)   
+            """)
+            time.sleep(9)
+            st.session_state.show_preguntas = False
+            st.rerun()
+
     # 2. SIDEBAR
     with st.sidebar:
         st.markdown(
