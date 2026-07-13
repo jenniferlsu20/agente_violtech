@@ -6,9 +6,8 @@ import base64
 import pathlib
 
 # URL de tu API de FastAPI.
-# En local usas "http://127.0.0.1:8000", cuando despliegues en Render la cambias por tu URL de producción.
 URL_API_VIOLET = st.sidebar.text_input(
-    "URL del Backend (Render)", value="http://127.0.0.1:8000"
+    "URL del Backend (Render)", value="https://violtech-violet-backend.onrender.com"
 )
 
 # Constantes de configuración locales de la UI
