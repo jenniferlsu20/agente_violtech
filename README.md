@@ -160,7 +160,12 @@ La interfaz de chat queda disponible en `http://localhost:8501`. Ingresa la URL 
 ## 💬 Vista previa
 
 <p align="center">
-  <img src="imagen/chat_violet_demo.png" alt="Conversación con Violet mostrando un reporte financiero generado y enviado por Telegram" width="700">
+  <img src="imagen/chat_violet_demo.png" alt="Pantalla principal del chat de Violet" width="420">
+  <img src="imagen/reporte_clientes_generado.png" alt="Reporte de clientes en riesgo generado por Violet" width="420">
+</p>
+<p align="center">
+  <img src="imagen/conversación_con_violet_mostrando_reporte_clientes_generado.png" alt="Conversación completa mostrando el reporte de clientes en riesgo" width="420">
+  <img src="imagen/reporte_enviado_telegram.png" alt="Reporte en PDF enviado exitosamente por Telegram" width="420">
 </p>
 
 ---
