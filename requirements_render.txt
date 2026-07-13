@@ -13,6 +13,7 @@ langchain>=0.1.0
 langchain-cohere
 langchain-core>=0.1.0
 langchain-community>=0.1.0
+langchain-experimental
 langchain-openai>=0.1.0
 langgraph
 matplotlib
