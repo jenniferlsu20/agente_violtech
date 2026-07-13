@@ -3,6 +3,7 @@
 **Violet** es un agente de inteligencia artificial conversacional desarrollado para **ViolTech**, capaz de analizar datos de negocio en tiempo real, consultar documentación corporativa y entregar reportes ejecutivos directamente por Gmail o Telegram, todo a través de una conversación en lenguaje natural.
 
 **💡 Ejemplos de Consultas para Violet** 
+
 Puedes interactuar con Violet para realizar diversas tareas analíticas y de gestión. Aquí tienes algunas preguntas que puedes probar:
 
 *General y Configuración:*
