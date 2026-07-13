@@ -17,6 +17,7 @@ langchain-openai>=0.1.0
 langgraph
 matplotlib
 pathlib
+seaborn
 
 openai>=1.10.0
 tiktoken>=0.6.0
