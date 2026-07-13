@@ -134,7 +134,6 @@ def main():
             st.info("""
                 ### Ejemplos de consulta:
                 - ¿Cuántos clientes tienen riesgo Alto? (Churn)
-                - Crea un gráfico de la tasa de churn por tipo de contrato (Churn)
                 - Genera un reporte ejecutivo de clientes en riesgo Alto (Churn)
                 - ¿Cuántas transacciones pierden dinero? (Finanzas)
                 - Genera un reporte financiero ejecutivo de Superstore (Finanzas)
