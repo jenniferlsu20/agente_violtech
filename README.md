@@ -1,6 +1,6 @@
 # 🟣 Violet | ViolTech — Agente IA de Análisis de Datos
 
-**Violet** es un agente de inteligencia artificial conversacional desarrollado para **ViolTech**, capaz de analizar datos de negocio en tiempo real, consultar documentación corporativa y entregar reportes ejecutivos directamente por Gmail o Telegram — todo a través de una conversación en lenguaje natural.
+**Violet** es un agente de inteligencia artificial conversacional desarrollado para **ViolTech**, capaz de analizar datos de negocio en tiempo real, consultar documentación corporativa y entregar reportes ejecutivos directamente por Gmail o Telegram, todo a través de una conversación en lenguaje natural.
 
 Proyecto desarrollado como parte del **Challenge de Alura Latam — Programa ONE (Oracle Next Education), Fase 2**.
 
@@ -21,28 +21,28 @@ Proyecto desarrollado como parte del **Challenge de Alura Latam — Programa ONE
 
 ## 🏗️ Arquitectura
 
-Violet está construida como un sistema de dos capas desacopladas, comunicadas vía API REST — pensado para desplegarse con el frontend y el backend en servidores distintos.
+Violet está construida como un sistema de dos capas desacopladas, comunicadas vía API REST, pensado para desplegarse con el frontend y el backend en servidores distintos.
 
 ```
-┌─────────────────────┐         HTTPS          ┌──────────────────────────┐
-│   Streamlit App      │  ───────────────────▶  │   FastAPI Backend         │
-│   (Frontend / Chat)  │  ◀───────────────────  │   (Render)                │
-└─────────────────────┘      JSON / REST        └──────────┬───────────────┘
-                                                              │
-                              ┌───────────────────────────────┼───────────────────────────────┐
-                              │                                │                                │
-                    ┌─────────▼─────────┐          ┌───────────▼───────────┐        ┌───────────▼───────────┐
-                    │  Router de         │          │  Agente ReAct          │        │  Vector Store (FAISS)  │
-                    │  Clasificación      │          │  (LangChain + Cohere)  │        │  + BM25 Híbrido         │
-                    │  CHURN/FINANZAS/    │          │  Herramientas de       │        │  sobre políticas PDF    │
-                    │  POLITICAS/ENVIO    │          │  reporte y gráficos    │        │                         │
-                    └────────────────────┘          └────────────┬───────────┘        └─────────────────────────┘
+┌─────────────────────┐         HTTPS           ┌──────────────────────────┐
+│   Streamlit App     │  ───────────────────▶  │   FastAPI Backend         │
+│   (Frontend / Chat) │  ◀───────────────────  │   (Render)                │
+└─────────────────────┘      JSON / REST        └───────────────┬──────────┘
+                                                                │
+                              ┌─────────────────────────  ──────┼────────────────────────────────┐
+                              │                                 │                                │
+                    ┌─────────▼──────────┐          ┌───────────▼───────────┐        ┌───────────▼────────────┐
+                    │  Router de         │          │  Agente ReAct         │        │  Vector Store (FAISS)  │
+                    │  Clasificación     │          │  (LangChain + Cohere) │        │  + BM25 Híbrido        │
+                    │  CHURN/FINANZAS/   │          │  Herramientas de      │        │  sobre políticas PDF   │
+                    │  POLITICAS/ENVIO   │          │  reporte y gráficos   │        │                        │
+                    └────────────────────┘          └───────────────┬───────┘        └────────────────────────┘
                                                                     │
-                                                      ┌─────────────┴─────────────┐
+                                                      ┌─────────────┴──────────────┐
                                                       │                            │
                                               ┌───────▼───────┐          ┌─────────▼─────────┐
-                                              │  Gmail (SMTP)  │          │  Telegram Bot API   │
-                                              └────────────────┘          └────────────────────┘
+                                              │  Gmail (SMTP) │          │  Telegram Bot API │
+                                              └───────────────┘          └───────────────────┘
 ```
 
 **Flujo típico:** el usuario escribe una pregunta en el chat de Streamlit → el backend clasifica la intención (churn, finanzas, políticas o envío) → según el caso, invoca al agente de LangChain (que decide qué herramienta usar) o consulta directamente el índice vectorial de documentos → la respuesta se muestra en pantalla y, si el usuario lo solicita, se exporta a PDF y se envía por el canal elegido.
@@ -129,7 +129,7 @@ TELEGRAM_BOT_TOKEN=tu_token_del_bot
 TELEGRAM_CHAT_ID=id_del_grupo_o_chat
 ```
 
-> 💡 El `TELEGRAM_CHAT_ID` de un grupo siempre es un número **negativo** (ej. `-1001234567890`). Asegúrate de que el bot esté agregado como miembro del grupo antes de enviar reportes.
+> 💡 Recuerda el `TELEGRAM_CHAT_ID` de un grupo siempre es un número **negativo** (ej. `-1001234567890`). Asegúrate de que el bot esté agregado como miembro del grupo antes de enviar reportes.
 
 ### 4. Levantar el backend (FastAPI)
 
@@ -153,7 +153,7 @@ La interfaz de chat queda disponible en `http://localhost:8501`. Ingresa la URL 
 - **Backend:** desplegado en [Render](https://render.com) mediante `requirements_render.txt`.
 - **Frontend:** puede desplegarse en [Hugging Face Spaces](https://huggingface.co/spaces) o cualquier servicio compatible con Streamlit, apuntando la URL del backend a la instancia de Render.
 
-> ⚠️ Recuerda configurar las mismas variables de entorno del paso 3 en el panel de tu servicio de despliegue — el archivo `.env` local **no** se sube al repositorio (está excluido en `.gitignore`) y debe configurarse manualmente en producción.
+> ⚠️ Recuerda configurar las mismas variables de entorno del paso 3 en el panel de tu servicio de despliegue, el archivo `.env` local **no** se sube al repositorio (está excluido en `.gitignore`) y debe configurarse manualmente en producción.
 
 ---
 
@@ -167,6 +167,20 @@ La interfaz de chat queda disponible en `http://localhost:8501`. Ingresa la URL 
   <img src="imagen/reporte_enviado_telegram.png" alt="Reporte en PDF enviado exitosamente por Telegram" width="420">
   <img src="imagen/reporte_clientes_generado.png" alt="Reporte de clientes en riesgo generado por Violet" width="420">
 </p>
+
+---
+
+### 🚀 ¡Interactúa con Violet!
+
+¿Tienes curiosidad por ver a Violet en acción? Te invito a explorar su interfaz y realizar tus propias consultas sobre gestión de clientes y políticas financieras.
+
+<br>
+
+[![Violet IA - Live Demo](https://img.shields.io/badge/Demo-Violet-purple?style=for-the-badge&logo=appveyor)](https://agentevioltech.streamlit.app/)
+
+<br>
+
+*Tu feedback es fundamental para seguir mejorando esta herramienta de Inteligencia de Negocios.*
 
 ---
 
