@@ -6,9 +6,8 @@ import base64
 import pathlib
 
 # URL de tu API de FastAPI.
-# En local usas "http://127.0.0.1:8000", cuando despliegues en Render la cambias por tu URL de producción.
 URL_API_VIOLET = st.sidebar.text_input(
-    "URL del Backend (Render)", value="http://127.0.0.1:8000"
+    "URL del Backend (Render)", value="https://violtech-violet-backend.onrender.com"
 )
 
 # Constantes de configuración locales de la UI
@@ -125,6 +124,24 @@ def main():
                 """)
             time.sleep(5)
             st.session_state.show_about = False
+            st.rerun()
+
+        if st.button("❓ Pregúntale a Violet", use_container_width=True):
+            st.session_state.show_preguntas = True
+        st.session_state.show_about = False
+
+        if st.session_state.get("show_preguntas", False):
+            st.info("""
+                ### Ejemplos de consulta:
+                - ¿Cuántos clientes tienen riesgo Alto? (Churn)
+                - Genera un reporte ejecutivo de clientes en riesgo Alto (Churn)
+                - ¿Cuántas transacciones pierden dinero? (Finanzas)
+                - Genera un reporte financiero ejecutivo de Superstore (Finanzas)
+                - ¿Cuál es la regla del 20%? (Políticas)
+                - ¿Cómo funciona el router de Violet? (Política)   
+            """)
+            time.sleep(9)
+            st.session_state.show_preguntas = False
             st.rerun()
 
     # 2. SIDEBAR
