@@ -52,7 +52,8 @@ def cargar_historial():
             return []
     return []
 
-def _sanear_para_persistencia(mensajes:list) -> list:
+
+def _sanear_para_persistencia(mensajes: list) -> list:
     """
     Devuelve una copia de los mensajes sin el Base64 de los gráficos.
     Se usa SOLO para lo que se escribe a disco o se reenvia al backend
@@ -73,7 +74,7 @@ def _sanear_para_persistencia(mensajes:list) -> list:
             nuevo_msg["content"] = contenido
         saneados.append(nuevo_msg)
     return saneados
-    
+
 
 def guardar_historial(mensajes):
     mensajes_saneados = _sanear_para_persistencia(mensajes)
@@ -98,7 +99,10 @@ def main():
     st.markdown(CSS_VIOLTECH, unsafe_allow_html=True)
 
     # 1. ENCABEZADO
-    col1, col2 = st.columns([0.85, 0.15])
+    (
+        col1,
+        col2,
+    ) = st.columns([0.65, 0.15])
     with col1:
         st.image("imagen/encabezado_de_correo_banner.png", width="stretch")
     with col2:
@@ -156,7 +160,13 @@ def main():
         st.markdown("---")
 
         if st.button("🗑️ Nueva conversación", use_container_width=True):
-            st.session_state.mensajes = []
+            st.session_state.mensajes = [
+                {
+                    "rol": "assistant",
+                    "contenido": SALUDO_VIOLET,
+                    "categoria": "POLITICAS",
+                }
+            ]
             st.session_state.ultima_categoria = None
             st.session_state.contexto_sesion = {}
             if RUTA_HISTORIAL.exists():
@@ -224,7 +234,7 @@ def main():
                     # Traducimos el historial al formato que exige el backend
                     historial_saneado = _sanear_para_persistencia(
                         st.session_state.mensajes[:-1]
-                    )                    
+                    )
                     historial_api = []
                     for m in historial_saneado:
                         # Usamos .get() por si quedó algún diccionario viejo en memoria
@@ -266,7 +276,17 @@ def main():
                     categoria = "FUERA_SCOPE"
 
                 # Desplegar resultados de la API
-                st.markdown(respuesta)
+                if "[IMG_B64:" in respuesta:
+                    texto_resp, img_tag_resp = respuesta.split("[IMG_B64:")
+                    b64_resp = img_tag_resp.replace("]", "").strip()
+                    st.markdown(texto_resp)
+                    try:
+                        img_bytes_resp = base64.b64decode(b64_resp)
+                        st.image(img_bytes_resp)
+                    except Exception:
+                        st.caption("⚠️ Error al renderizar la imagen en memoria.")
+                else:
+                    st.markdown(respuesta)
 
                 with st.expander("🛠️ Ver JSON de depuración"):
                     st.write("Payload enviado a FastAPI:")

@@ -44,16 +44,7 @@ async def procesar(
     if any(m in p_lower for m in ["gmail", "telegram"]):
         return await _flujo_envio(p_lower, nuevos_estados)
 
-    # 3. FILTRO DE SEGURIDAD (Scope)
-    if not _es_relevante(p_lower):
-        return (
-            "Lo siento, mi especialidad es el análisis de datos de clientes y reportes de gestión "
-            "para ViolTech. ¿Te gustaría analizar alguna métrica de retención o finanzas?",
-            "FUERA_DE_CONTEXTO",
-            nuevos_estados,
-        )
-
-    # 4. CLASIFICACIÓN Y PROCESAMIENTO
+    # 3. CLASIFICACIÓN Y PROCESAMIENTO
     # Le pasamos al router el tipo de reporte activo de la sesión, para que
     # respuestas ambiguas (ej. "sí", "genera el gráfico") no pierdan el
     # contexto de si veníamos de CHURN o FINANZAS.
@@ -137,26 +128,6 @@ async def _flujo_envio(p_lower: str, nuevos_estados: dict) -> tuple:
         "ACCION_ENVIO",
         nuevos_estados,
     )
-
-
-# def _es_relevante(pregunta_lower: str) -> bool:
-#     temas = [
-#         "churn",
-#         "financiero",
-#         "datos",
-#         "cliente",
-#         "reporte",
-#         "grafico",
-#         "analisis",
-#         "ventas",
-#         "retencion",
-#         "política",
-#         "manual",
-#         "violet",
-#         "ingreso",
-#         "ganancia",
-#     ]
-#     return any(tema in pregunta_lower for tema in temas)
 
 
 def _consultar_documentacion(pregunta, vector_store):

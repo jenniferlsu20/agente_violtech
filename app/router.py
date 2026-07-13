@@ -46,6 +46,34 @@ def clasificar(pregunta: str, categoria_anterior: str = "FINANZAS") -> str:
     ):
         return "ACCION_ENVIO"
 
+    # ── Frases textuales de los documentos PDF (máxima prioridad) ───────────────────────
+    frases_documento_exactas = [
+        "rentabilidad por categoria",
+        "rentabilidad por categoría",
+        "rentabilidad por segmento",
+        "hallazgos confirmados",
+        "subcategorias criticas",
+        "subcategorías críticas",
+        "sub-categorías críticas",
+        "sub-categorias criticas",
+        "gestion financiera",
+        "gestión financiera",
+        "política de gestión financiera",
+        "politica de gestion financiera",
+        "ejemplos de preguntas (proyecto churn)",
+        "ejemplos de preguntas finanzas",
+        "arquitectura tecnica",
+        "arquitectura técnica",
+        "limitaciones conocidas",
+        "niveles de riesgo",
+        "hallazgos críticos del análisis",
+        "hallazgos criticos del analisis",
+        "estrategia de intervención",
+    ]
+    for frase in frases_documento_exactas:
+        if frase in p:
+            return "POLITICAS"
+
     # ── Frases compuestas primero (mayor precisión) ───────────────────────
     # CHURN — frases específicas
     frases_churn_exactas = [

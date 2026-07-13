@@ -4,7 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Cargar variables de entorno
-load_dotenv()
+load_dotenv(override=True)
 
 # Rutas base
 BASE_DIR = Path(__file__).resolve().parent.parent

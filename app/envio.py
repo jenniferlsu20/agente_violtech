@@ -76,10 +76,10 @@ def generar_pdf_reporte(
     doc = SimpleDocTemplate(
         buffer,
         pagesize=letter,
-        rightMargin=45,
-        leftMargin=45,
-        topMargin=45,
-        bottomMargin=45,
+        rightMargin=50,
+        leftMargin=50,
+        topMargin=40,
+        bottomMargin=40,
     )
 
     styles = getSampleStyleSheet()
@@ -99,6 +99,7 @@ def generar_pdf_reporte(
         textColor=COLOR_PRIMARIO,
         spaceAfter=15,
         keepWithNext=True,
+        fontName="Helvetica-Bold",
     )
     estilo_cuerpo = ParagraphStyle(
         "RepBody",
@@ -107,6 +108,14 @@ def generar_pdf_reporte(
         leading=16,
         textColor=COLOR_TEXTO,
         spaceAfter=10,
+        fontName="Helvetica",
+    )
+
+    # Texto para listas con sangría
+    estilo_lista = ParagraphStyle(
+        "TextoLista",
+        parent=estilo_cuerpo,
+        leftIndent=15,
     )
 
     # Encabezado Principal del Reporte
@@ -137,6 +146,7 @@ def generar_pdf_reporte(
                 spaceBefore=8,
                 spaceAfter=4,
                 keepWithNext=True,
+                fontName="Helvetica",
             )
             texto_fmt = _convertir_markdown_a_tags_reportlab(
                 linea_limpia.replace("###", "").strip()
@@ -152,6 +162,7 @@ def generar_pdf_reporte(
                 spaceBefore=12,
                 spaceAfter=6,
                 keepWithNext=True,
+                fontName="Helvetica-Bold",
             )
             texto_fmt = _convertir_markdown_a_tags_reportlab(
                 linea_limpia.replace("##", "").strip()
@@ -162,6 +173,10 @@ def generar_pdf_reporte(
                 linea_limpia.replace("#", "").strip()
             )
             story.append(Paragraph(texto_fmt, estilo_titulo))
+        elif linea.startswith("- "):
+            # Formatear viñetas
+            texto_fmt = "• " + linea[2:].strip()
+            story.append(Paragraph(texto_fmt, estilo_lista))
         else:
             # Líneas regulares o viñetas
             texto_fmt = _convertir_markdown_a_tags_reportlab(linea_limpia)
@@ -174,7 +189,7 @@ def generar_pdf_reporte(
             img_buffer = io.BytesIO(img_data)
             # Dimensiones escaladas de forma segura para la página letter
             img = Image(img_buffer, width=420, height=240)
-            story.append(Spacer(1, 15))
+            story.append(Spacer(1, 20))
             story.append(img)
         except Exception as e:
             story.append(Spacer(1, 10))
@@ -205,7 +220,7 @@ async def enviar_por_telegram(
         "chat_id": TELEGRAM_CHAT_ID,
         "caption": (
             "📊 *¡Hola!* éste es el reporte interactivo en PDF que me solicitaste, "
-            "lo puedes visualizar ingresando al grupo Violet_Reports."
+            "lo puedes visualizar ingresando al grupo Violet Reports."
         ),
         "parse_mode": "Markdown",
     }
