@@ -127,8 +127,8 @@ def main():
             st.rerun()
 
         if st.button("❓ Pregúntale a Violet", use_container_width=True):
-        st.session_state.show_preguntas = True
-        st.session_state.show_about = False # Aseguramos que el otro se cierre
+            st.session_state.show_preguntas = True
+        st.session_state.show_about = False
 
         if st.session_state.get("show_preguntas", False):
             st.info("""
