@@ -10,6 +10,7 @@ numpy>=1.26.0
 
 # --- Inteligencia Artificial y LangChain ---
 langchain>=0.1.0
+langchain-cohere
 langchain-core>=0.1.0
 langchain-community>=0.1.0
 langchain-openai>=0.1.0
