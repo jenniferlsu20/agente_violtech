@@ -172,7 +172,7 @@ def _procesar_analisis(pregunta, dfs, vector_store, categoria, historial):
         return res.get("output", "No obtuve respuesta."), categoria
     except Exception as e:
         if _es_error_limite_api(e):
-            return MENSAJE_LMITE_API, categoria        
+            return MENSAJE_LIMITE_API, categoria        
         return f"Error técnico: {str(e)}", categoria
 
 
