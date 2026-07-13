@@ -19,6 +19,20 @@ from app.envio import (
 from app.agente import construir_agente, truncar_historial, llm
 from app.router import clasificar
 
+def _es_error_limite_api(excepcion: Exception) -> bool:
+    """
+    Detecta si una excepcion corresponde a un límite de tasa/cuota de la API
+    de Cohere (HTTP 429), para mostrar un mensaje claro al usuario en vez de
+    un traceback técnico con headers HTTP.
+    """
+    texto = str(excepcion).lower()
+    return "429" in texto or "trial key" in texto or "rate limit" in texto
+
+MENSAJE_LIMITE_API = (
+    "⏳ Violet está recibiendo demasiados solicitudes en este momento "
+    "(se alcanzó el límite de la API). Por favor, intenta de nuevo en "
+    "unos minutos."
+)
 
 async def procesar(
     pregunta: str, dfs: dict, vector_store, historial: list, contexto_sesion: dict
@@ -141,6 +155,8 @@ def _consultar_documentacion(pregunta, vector_store):
             {"contexto": contexto, "pregunta": pregunta}
         )
     except Exception as e:
+        if _es_error_limite_api(e):
+            return MENSAJE_LIMITE_API
         return f"Error al consultar políticas: {str(e)}"
 
 
@@ -155,6 +171,8 @@ def _procesar_analisis(pregunta, dfs, vector_store, categoria, historial):
         res = agente.invoke({"input": pregunta, "chat_history": historial_formateado})
         return res.get("output", "No obtuve respuesta."), categoria
     except Exception as e:
+        if _es_error_limite_api(e):
+            return MENSAJE_LIMITE_API, categoria        
         return f"Error técnico: {str(e)}", categoria
 
 
