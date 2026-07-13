@@ -15,6 +15,7 @@ langchain-core>=0.1.0
 langchain-community>=0.1.0
 langchain-openai>=0.1.0
 langgraph
+matplotlib
 pathlib
 
 openai>=1.10.0
