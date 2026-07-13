@@ -18,6 +18,7 @@ langchain-openai>=0.1.0
 langgraph
 matplotlib
 pathlib
+rank_bm25
 seaborn
 
 openai>=1.10.0
